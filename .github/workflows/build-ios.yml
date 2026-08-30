@@ -29,8 +29,8 @@ jobs:
         run: |
           # Use xcodebuild to build the app without code signing
           xcodebuild build \
-            -workspace mobilscan.xcworkspace \
-            -scheme mobilscan \
+            -workspace Mobilscan.xcworkspace \
+            -scheme Mobilscan \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
@@ -42,11 +42,11 @@ jobs:
         run: |
           mkdir -p Payload
           # The built .app file is typically located in the Release-iphoneos directory
-          cp -r ios/build/Build/Products/Release-iphoneos/mobilscan.app Payload/
-          zip -r mobilscan.ipa Payload
+          cp -r ios/build/Build/Products/Release-iphoneos/Mobilscan.app Payload/
+          zip -r Mobilscan.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Mobilscan-IPA
-          path: mobilscan.ipa
+          path: Mobilscan.ipa
