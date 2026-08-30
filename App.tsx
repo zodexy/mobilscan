@@ -32,13 +32,16 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={StyleSheet.absoluteFill}>
+        <LidarScannerView 
+          style={StyleSheet.absoluteFill} 
+          isScanning={isScanning} 
+          onFrameCaptured={(e) => setFrameCount(e.nativeEvent.frameCount)}
+        />
+      </View>
+
       {isScanning ? (
         <View style={styles.scannerContainer}>
-          <LidarScannerView 
-            style={styles.scanner} 
-            isScanning={true} 
-            onFrameCaptured={(e) => setFrameCount(e.nativeEvent.frameCount)}
-          />
           <View style={styles.overlayTop}>
             <View style={styles.badge}>
               <Text style={styles.badgeText}>Adatpontok: {frameCount}</Text>
@@ -57,7 +60,7 @@ export default function App() {
           </View>
         </View>
       ) : (
-        <View style={styles.homeContainer}>
+        <View style={[styles.homeContainer, { backgroundColor: '#1c1c1e' }]}>
           <Text style={styles.title}>Mobilscan</Text>
           <Text style={styles.subtitle}>LiDAR & Gaussian Splatting</Text>
           
