@@ -4,6 +4,7 @@ import { ViewProps } from 'react-native';
 
 export type LidarScannerViewProps = {
   isScanning?: boolean;
+  onFrameCaptured?: (event: { nativeEvent: { frameCount: number } }) => void;
 } & ViewProps;
 
 const NativeView = requireNativeView<LidarScannerViewProps>('LidarScanner');

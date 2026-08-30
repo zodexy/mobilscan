@@ -13,11 +13,11 @@
         "NSCameraUsageDescription": "Szükségünk van a kamerára és a LiDAR szenzorra a szoba beszkenneléséhez.",
         "UIRequiredDeviceCapabilities": [
           "arkit",
-          "metal",
-          "arkit",
           "metal"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
       }
     },
     "android": {
