@@ -2,6 +2,7 @@ import ExpoModulesCore
 import ARKit
 import SceneKit
 import CoreImage
+import UIKit
 
 extension SCNGeometry {
     convenience init?(from meshGeometry: ARMeshGeometry) {
@@ -177,17 +178,16 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         // Convert to CIImage immediately on the AR thread
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
-        // Retain depth buffer for background thread
-        if let db = depthBuffer {
-            CVPixelBufferRetain(db)
-        }
+        // In Swift, ARC automatically manages Core Foundation objects like CVPixelBuffer.
+        // So we don't need CVPixelBufferRetain or CVPixelBufferRelease.
         
         savingQueue.async { [weak self] in
             guard let self = self else { return }
             
-            // Save Image
-            if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
-                if let jpegData = self.ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [.quality: 0.9]) {
+            // Save Image using UIKit
+            if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                let uiImage = UIImage(cgImage: cgImage)
+                if let jpegData = uiImage.jpegData(compressionQuality: 0.9) {
                     try? jpegData.write(to: imageUrl)
                 }
             }
@@ -202,7 +202,6 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                     try? data.write(to: depthUrl)
                 }
                 CVPixelBufferUnlockBaseAddress(db, .readOnly)
-                CVPixelBufferRelease(db)
             }
         }
     }
