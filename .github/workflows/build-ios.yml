@@ -1,0 +1,52 @@
+name: Build iOS IPA (Unsigned)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prebuild iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build unsigned .app
+        working-directory: ios
+        run: |
+          # Use xcodebuild to build the app without code signing
+          xcodebuild build \
+            -workspace mobilscan.xcworkspace \
+            -scheme mobilscan \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package into .ipa
+        run: |
+          mkdir -p Payload
+          # The built .app file is typically located in the Release-iphoneos directory
+          cp -r ios/build/Build/Products/Release-iphoneos/mobilscan.app Payload/
+          zip -r mobilscan.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mobilscan-IPA
+          path: mobilscan.ipa

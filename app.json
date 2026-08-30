@@ -7,7 +7,18 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.domon.mobilscan",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Szükségünk van a kamerára és a LiDAR szenzorra a szoba beszkenneléséhez.",
+        "UIRequiredDeviceCapabilities": [
+          "arkit",
+          "metal",
+          "arkit",
+          "metal"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -20,6 +31,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "69c0b3cf-15b0-44e0-bc11-39cf5503618e"
+      }
     }
   }
 }
