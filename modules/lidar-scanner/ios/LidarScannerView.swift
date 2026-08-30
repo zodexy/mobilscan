@@ -14,9 +14,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     arView.delegate = self
     arView.session.delegate = self
     
-    // Built-in debug option to show the LiDAR mesh
-    // It defaults to a colorful/wireframe representation in SceneKit.
-    arView.debugOptions = [.showSceneUnderstanding]
+    // Built-in debug option to show the LiDAR feature points (point cloud)
+    // Note: showSceneUnderstanding is only available in RealityKit (ARView), not SceneKit (ARSCNView).
+    arView.debugOptions = [.showFeaturePoints]
     
     addSubview(arView)
   }
