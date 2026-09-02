@@ -1,7 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { zip } from 'react-native-zip-archive';
 import LidarScannerView from './modules/lidar-scanner/src/LidarScannerView';
 import LidarScannerModule from './modules/lidar-scanner/src/LidarScannerModule';

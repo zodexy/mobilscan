@@ -163,7 +163,7 @@ def run_gaussian_splatting(job_id: str, zip_path: str):
         # Optimalizált paraméterek a legolcsóbb (leggyorsabb), de kiváló minőségű futáshoz
         train_cmd = [
             "ns-train", "splatfacto", 
-            "--vis", "wandb",
+            "--vis", "tensorboard",
             "--pipeline.datamanager.max-thread-workers", "4",
             "--pipeline.model.camera-optimizer.mode", "off", # ARKit LiDAR pozíciók fixek, nincs szükség drága optimalizálásra
             "--pipeline.model.cull-alpha-thresh", "0.01", # Kicsit magasabb küszöb, hogy gyorsabban kitörölje a felesleges pontokat (floaters)
