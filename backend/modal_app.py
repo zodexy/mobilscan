@@ -4,8 +4,7 @@ import json
 import zipfile
 import shutil
 import subprocess
-from PIL import Image
-
+import struct
 import modal
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
@@ -20,7 +19,7 @@ image = (
         "torch==2.1.2", "torchvision==0.16.2", 
         index_url="https://download.pytorch.org/whl/cu121"
     )
-    .pip_install("ninja", "numpy<2", "Pillow")
+    .pip_install("ninja", "numpy<2")
     .pip_install("nerfstudio")
     .pip_install("fastapi", "uvicorn", "python-multipart", "pydantic")
 )
@@ -84,9 +83,26 @@ def convert_arkit_to_nerfstudio(data_dir: str):
     if not frames:
         raise Exception("Nincsenek képkockák a transforms.json-ben!")
         
-    first_image_path = os.path.join(data_dir, frames[0]["file_path"])
-    with Image.open(first_image_path) as img:
-        w, h = img.size
+    def get_jpeg_size(filepath):
+        with open(filepath, 'rb') as f:
+            f.read(2)
+            b = f.read(1)
+            try:
+                while (b and ord(b) != 0xDA):
+                    while (ord(b) != 0xFF): b = f.read(1)
+                    while (ord(b) == 0xFF): b = f.read(1)
+                    if (ord(b) >= 0xC0 and ord(b) <= 0xC3):
+                        f.read(3)
+                        h, w = struct.unpack(">HH", f.read(4))
+                        return w, h
+                    else:
+                        f.read(int(struct.unpack(">H", f.read(2))[0])-2)
+                    b = f.read(1)
+            except Exception:
+                pass
+        return 1920, 1440
+
+    w, h = get_jpeg_size(first_image_path)
         
     intrinsics = frames[0]["intrinsics_matrix"]
     fl_x = intrinsics[0][0]
