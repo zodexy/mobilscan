@@ -75,6 +75,30 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
         lastCaptureTime = 0
+        
+        // Késleltetve (hogy az ARKit már bekapcsolja a kamerát) átállítjuk a záridőt "Sport" módra!
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let discoverySession = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTripleCamera, .builtInDualCamera, .builtInLiDARDepthCamera],
+                mediaType: .video,
+                position: .back
+            )
+            for device in discoverySession.devices {
+                do {
+                    try device.lockForConfiguration()
+                    if device.isExposureModeSupported(.custom) {
+                        // 1/120 másodperc tökéletes kompromisszum: szinte nulla motion blur, de még kap elég fényt
+                        let duration = CMTimeMake(value: 1, timescale: 120)
+                        let iso = min(device.activeFormat.maxISO, 800) // Magasabb ISO, hogy ne legyen túl sötét
+                        device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
+                        print("Kamera záridő sikeresen beállítva: 1/120s a(z) \(device.localizedName) eszközön")
+                    }
+                    device.unlockForConfiguration()
+                } catch {
+                    print("Nem sikerült zárolni a kamerát: \(error)")
+                }
+            }
+        }
     }
     
     func stopScanning() {

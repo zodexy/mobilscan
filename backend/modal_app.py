@@ -251,22 +251,38 @@ def run_gaussian_splatting(job_id: str, zip_path: str):
         # 2. Fix Transforms (LiDAR ARKit to Nerfstudio)
         print(f"[{job_id}] Converting transforms...")
         actual_data_dir = convert_arkit_to_nerfstudio(job_dir)
+        
+        # Generate images_2 for downscale-factor 2
+        print(f"[{job_id}] Generating downscaled images (images_2)...")
+        import cv2
+        images_dir = os.path.join(actual_data_dir, "images")
+        images_2_dir = os.path.join(actual_data_dir, "images_2")
+        os.makedirs(images_2_dir, exist_ok=True)
+        for img_name in os.listdir(images_dir):
+            if img_name.endswith(".jpg") or img_name.endswith(".png"):
+                img_path = os.path.join(images_dir, img_name)
+                img = cv2.imread(img_path)
+                if img is not None:
+                    h, w = img.shape[:2]
+                    img_2 = cv2.resize(img, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+                    cv2.imwrite(os.path.join(images_2_dir, img_name), img_2)
+                    
         volume.commit()
         
         # 3. Train Splatfacto
         update_status(job_id, "training")
         print(f"[{job_id}] Training Gaussian Splats...")
-        # Optimalizált paraméterek a legolcsóbb (leggyorsabb), de kiváló minőségű futáshoz
         train_cmd = [
             "ns-train", "splatfacto", 
             "--vis", "tensorboard",
             "--pipeline.datamanager.max-thread-workers", "4",
-            "--pipeline.model.camera-optimizer.mode", "off", # ARKit LiDAR pozíciók fixek, nincs szükség drága optimalizálásra
-            "--pipeline.model.cull-alpha-thresh", "0.01", # Kicsit magasabb küszöb, hogy gyorsabban kitörölje a felesleges pontokat (floaters)
-            "--pipeline.model.sh-degree", "2", # SH degree 2 (3 helyett) jelentősen gyorsítja a tanulást és csökkenti a fájlméretet, minimális minőségvesztéssel
+            "--pipeline.model.camera-optimizer.mode", "SO3xR3", # BEKAPCSOLVA: kijavítja a gyors mozgás miatti ARKit pontatlanságot
+            "--pipeline.model.sh-degree", "3", # Maximum minőség a gyönyörű fényes felületekért
             "--timestamp", job_id,
-            "--max-num-iterations", "7000", # 30000 helyett 7000 tökéletes az ingatlanokhoz, kb. ötödére csökkenti a költséget
-            "nerfstudio-data", "--data", actual_data_dir
+            "--max-num-iterations", "4000", # Középút: 4000 lépés elég a szép minőséghez, de még mindig nagyon olcsó
+            "nerfstudio-data", 
+            "--data", actual_data_dir,
+            "--downscale-factor", "2" 
         ]
         
         subprocess.run(train_cmd, check=True)
