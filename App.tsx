@@ -71,7 +71,12 @@ export default function App() {
 
       // 2. Zipeljük be a mappát
       const targetZipPath = FileSystem.cacheDirectory + 'upload_scan.zip';
-      await zip(latestScanDir, targetZipPath);
+      
+      // react-native-zip-archive nem szereti a file:// prefixet iOS-en
+      const cleanSourcePath = latestScanDir.replace('file://', '');
+      const cleanTargetPath = targetZipPath.replace('file://', '');
+      
+      await zip(cleanSourcePath, cleanTargetPath);
 
       setProcessStatus('Feltöltés a felhőbe...');
 
