@@ -270,7 +270,7 @@ async def download_splat(job_id: str):
 
 @web_api.get("/view/{job_id}")
 async def view_splat(job_id: str):
-    # HTML string that uses Luma WebGL to render the splat directly from the /download endpoint
+    # HTML string that uses mkkellogg/GaussianSplats3D to render the splat directly from the /download endpoint
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -280,95 +280,57 @@ async def view_splat(job_id: str):
         <title>Mobilscan 3D Viewer</title>
         <style>
             body {{ margin: 0; overflow: hidden; background-color: #111; font-family: sans-serif; }}
-            #canvas-container {{ width: 100vw; height: 100vh; }}
-            #ui {{ position: absolute; top: 20px; left: 20px; color: white; background: rgba(0,0,0,0.6); padding: 15px; border-radius: 10px; backdrop-filter: blur(10px); }}
+            #canvas-container {{ width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }}
+            #ui {{ position: absolute; top: 20px; left: 20px; color: white; background: rgba(0,0,0,0.6); padding: 15px; border-radius: 10px; backdrop-filter: blur(10px); z-index: 10; pointer-events: none; }}
             h1 {{ margin: 0 0 10px 0; font-size: 20px; color: #34d399; }}
             p {{ margin: 5px 0; font-size: 14px; color: #ccc; }}
             .controls {{ color: #60a5fa; font-weight: bold; }}
+            #loading {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 24px; z-index: 20; }}
         </style>
     </head>
     <body>
         <div id="ui">
             <h1>Mobilscan 3D Bejárás</h1>
-            <p>Mozgás: <span class="controls">W A S D</span></p>
-            <p>Nézelődés: <span class="controls">Egér kattintás + Húzás</span></p>
-            <p>Fel / Le: <span class="controls">Q / E</span></p>
+            <p>Keringés: <span class="controls">Bal egérgomb + Húzás</span></p>
+            <p>Mozgás (Pan): <span class="controls">Jobb egérgomb + Húzás</span></p>
+            <p>Közelítés: <span class="controls">Görgő</span></p>
         </div>
+        <div id="loading">.PLY letöltése és betöltése (ez eltarthat egy percig is)...</div>
         <div id="canvas-container"></div>
+
         <script type="importmap">
         {{
             "imports": {{
                 "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.157.0/examples/jsm/",
-                "@lumaai/luma-web": "https://unpkg.com/@lumaai/luma-web@0.2.0/dist/library/luma-web.module.js"
+                "@mkkellogg/gaussian-splats-3d": "https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.1/build/gaussian-splats-3d.module.js"
             }}
         }}
         </script>
         <script type="module">
+            import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
             import * as THREE from 'three';
-            import {{ PointerLockControls }} from 'three/addons/controls/PointerLockControls.js';
-            import {{ LumaSplatsThree }} from '@lumaai/luma-web';
 
-            const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 1.6, 2);
-
-            const renderer = new THREE.WebGLRenderer({{ antialias: true }});
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.getElementById('canvas-container').appendChild(renderer.domElement);
-
+            const viewer = new GaussianSplats3D.Viewer({{
+                'cameraUp': [0, -1, 0],
+                'initialCameraPosition': [0, 0, 5],
+                'initialCameraLookAt': [0, 0, 0],
+                'sharedMemoryForWorkers': false // Jobb kompatibilitás minden böngészővel
+            }});
+            
             const splatUrl = window.location.origin + '/download/{job_id}';
-            let splat = new LumaSplatsThree({{
-                source: splatUrl,
-                loadingAnimationEnabled: true,
-            }});
-            scene.add(splat);
-
-            const controls = new PointerLockControls(camera, renderer.domElement);
-            document.addEventListener('click', () => controls.lock());
-
-            const move = {{ forward: false, backward: false, left: false, right: false, up: false, down: false }};
-            const speed = 0.05;
-
-            document.addEventListener('keydown', (e) => {{
-                switch(e.code) {{
-                    case 'KeyW': move.forward = true; break;
-                    case 'KeyS': move.backward = true; break;
-                    case 'KeyA': move.left = true; break;
-                    case 'KeyD': move.right = true; break;
-                    case 'KeyQ': move.up = true; break;
-                    case 'KeyE': move.down = true; break;
-                }}
-            }});
-            document.addEventListener('keyup', (e) => {{
-                switch(e.code) {{
-                    case 'KeyW': move.forward = false; break;
-                    case 'KeyS': move.backward = false; break;
-                    case 'KeyA': move.left = false; break;
-                    case 'KeyD': move.right = false; break;
-                    case 'KeyQ': move.up = false; break;
-                    case 'KeyE': move.down = false; break;
-                }}
-            }});
-
-            function animate() {{
-                requestAnimationFrame(animate);
-                if (controls.isLocked) {{
-                    if (move.forward) controls.moveForward(speed);
-                    if (move.backward) controls.moveForward(-speed);
-                    if (move.left) controls.moveRight(-speed);
-                    if (move.right) controls.moveRight(speed);
-                    if (move.up) camera.position.y += speed;
-                    if (move.down) camera.position.y -= speed;
-                }}
-                renderer.render(scene, camera);
-            }}
-            animate();
-
-            window.addEventListener('resize', () => {{
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            viewer.addSplatScene(splatUrl, {{
+                'splatAlphaCrop': 0.1,
+                'format': GaussianSplats3D.SceneFormat.Ply,
+                'progressiveLoad': true
+            }})
+            .then(() => {{
+                document.getElementById('loading').style.display = 'none';
+                viewer.start();
+            }})
+            .catch((e) => {{
+                document.getElementById('loading').innerText = 'Hiba a betöltéskor: ' + e;
+                console.error(e);
             }});
         </script>
     </body>
