@@ -377,7 +377,7 @@ async def view_splat(job_id: str):
     return HTMLResponse(content=html_content, status_code=200)
 
 # Wrap FastAPI with Modal ASGI app
-@app.function(volumes={VOLUME_DIR: volume})
+@app.function(image=image, volumes={VOLUME_DIR: volume})
 @modal.asgi_app()
 def fastapi_app():
     return web_api
