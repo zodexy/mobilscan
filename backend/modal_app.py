@@ -13,7 +13,7 @@ from pydantic import BaseModel
 # 1. Image Definition
 # We install Torch and Nerfstudio on top of an Ubuntu CUDA image
 image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04", add_python="3.10")
     .apt_install("git", "wget", "ffmpeg", "libsm6", "libxext6", "build-essential", "clang")
     .pip_install(
         "torch==2.1.2", "torchvision==0.16.2", 
