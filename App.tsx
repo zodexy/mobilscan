@@ -69,8 +69,8 @@ export default function App() {
         throw new Error('Nem található mentett szkennelés.');
       }
 
-      // 2. Zipeljük be a mappát
-      const targetZipPath = FileSystem.cacheDirectory + 'upload_scan.zip';
+      // 2. Zipeljük be a mappát (használjuk a documentDirectory-t, mert a cacheDirectory undefined volt!)
+      const targetZipPath = (FileSystem.documentDirectory || '') + 'upload_scan.zip';
       
       // Tisztítsuk meg a path-eket teljesen (file:// eltávolítása, URL dekódolás, perjelek a végén)
       let cleanSourcePath = decodeURI(latestScanDir).replace('file://', '');
