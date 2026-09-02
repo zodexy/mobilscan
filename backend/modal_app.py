@@ -102,6 +102,7 @@ def convert_arkit_to_nerfstudio(data_dir: str):
                 pass
         return 1920, 1440
 
+    first_image_path = os.path.join(data_dir, frames[0]["file_path"])
     w, h = get_jpeg_size(first_image_path)
         
     intrinsics = frames[0]["intrinsics_matrix"]
