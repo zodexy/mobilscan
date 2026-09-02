@@ -187,8 +187,7 @@ def run_gaussian_splatting(job_id: str, zip_path: str):
             "--pipeline.model.sh-degree", "2", # SH degree 2 (3 helyett) jelentősen gyorsítja a tanulást és csökkenti a fájlméretet, minimális minőségvesztéssel
             "--timestamp", job_id,
             "--max-num-iterations", "7000", # 30000 helyett 7000 tökéletes az ingatlanokhoz, kb. ötödére csökkenti a költséget
-            "nerfstudio-data", "--data", actual_data_dir, 
-            "--downscale-factor", "4" # Képek felbontásának negyedelése (ahogy a notebookodban is volt) drasztikusan gyorsít
+            "nerfstudio-data", "--data", actual_data_dir
         ]
         
         subprocess.run(train_cmd, check=True)
