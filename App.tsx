@@ -44,13 +44,11 @@ export default function App() {
 
   const findLatestScanDir = async () => {
     try {
-      if (!FileSystem.documentDirectory) return null;
-      const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory);
-      const scanDirs = files.filter(f => f.startsWith('Scan_')).sort().reverse();
-      if (scanDirs.length > 0) {
-        return FileSystem.documentDirectory + scanDirs[0];
+      const latestDir = await LidarScannerModule.getLatestScanDir();
+      if (latestDir) {
+        return latestDir;
       } else {
-        Alert.alert("Debug Info", "Nincs Scan_ mappa. Fájlok a mappában: " + JSON.stringify(files));
+        Alert.alert("Debug Info", "Nincs Scan_ mappa a natív modul szerint.");
       }
       return null;
     } catch (error: any) {
