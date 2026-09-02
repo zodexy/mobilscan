@@ -69,16 +69,15 @@ export default function App() {
         throw new Error('Nem található mentett szkennelés.');
       }
 
-      // 2. Zipeljük be a mappát (használjuk a documentDirectory-t, mert a cacheDirectory undefined volt!)
-      const targetZipPath = (FileSystem.documentDirectory || '') + 'upload_scan.zip';
-      
-      // Tisztítsuk meg a path-eket teljesen (file:// eltávolítása, URL dekódolás, perjelek a végén)
+      // Tisztítsuk meg a forrás útvonalat
       let cleanSourcePath = decodeURI(latestScanDir).replace('file://', '');
       if (cleanSourcePath.endsWith('/')) {
         cleanSourcePath = cleanSourcePath.slice(0, -1);
       }
       
-      let cleanTargetPath = decodeURI(targetZipPath).replace('file://', '');
+      // A cél útvonal legyen pontosan ugyanott, csak .zip kiterjesztéssel! 
+      // Így egyáltalán nem függünk az expo-file-system hibás változóitól.
+      let cleanTargetPath = cleanSourcePath + '.zip';
       
       try {
         await zip(cleanSourcePath, cleanTargetPath);
@@ -88,13 +87,15 @@ export default function App() {
 
       setProcessStatus('Feltöltés a felhőbe...');
 
+      const fileUriForUpload = 'file://' + cleanTargetPath;
+
       // 3. Feltöltés a FastAPI szerverre
-      const fileInfo = await FileSystem.getInfoAsync(targetZipPath);
+      const fileInfo = await FileSystem.getInfoAsync(fileUriForUpload);
       if (!fileInfo.exists) throw new Error('Zip fájl nem jött létre.');
 
       const uploadResult = await FileSystem.uploadAsync(
         `${API_URL}/upload`,
-        targetZipPath,
+        fileUriForUpload,
         {
           fieldName: 'file',
           httpMethod: 'POST',
