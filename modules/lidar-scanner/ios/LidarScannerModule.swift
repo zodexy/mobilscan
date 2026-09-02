@@ -5,7 +5,7 @@ public class LidarScannerModule: Module {
     Name("LidarScanner")
 
     View(LidarScannerView.self) {
-      Events("onFrameCaptured")
+      Events("onFrameCaptured", "onError")
       
       Prop("isScanning") { (view: LidarScannerView, isScanning: Bool) in
         if isScanning {

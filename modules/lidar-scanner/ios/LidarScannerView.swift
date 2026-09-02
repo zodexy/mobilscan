@@ -34,6 +34,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     let ciContext = CIContext()
     
     let onFrameCaptured = EventDispatcher()
+    let onError = EventDispatcher()
     
     required init(appContext: AppContext? = nil) {
         super.init(appContext: appContext)
@@ -57,6 +58,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     func startScanning() {
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
             print("LiDAR is not supported on this device.")
+            onError([
+                "message": "A készüléked nem támogatja a LiDAR szkennelést."
+            ])
             return
         }
         
@@ -102,6 +106,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         let depthDir = scanDir.appendingPathComponent("depth", isDirectory: true)
         
         do {
+            try fileManager.createDirectory(at: scanDir, withIntermediateDirectories: true, attributes: nil)
             try fileManager.createDirectory(at: imagesDir, withIntermediateDirectories: true, attributes: nil)
             try fileManager.createDirectory(at: depthDir, withIntermediateDirectories: true, attributes: nil)
         } catch {
@@ -178,30 +183,33 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         // Convert to CIImage immediately on the AR thread
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
-        // In Swift, ARC automatically manages Core Foundation objects like CVPixelBuffer.
-        // So we don't need CVPixelBufferRetain or CVPixelBufferRelease.
+        // Create CGImage synchronously so the pixel buffer is no longer needed by the background thread
+        let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent)
         
-        savingQueue.async { [weak self] in
-            guard let self = self else { return }
-            
+        // Extract depth data synchronously
+        var depthData: Data? = nil
+        if let db = depthBuffer {
+            CVPixelBufferLockBaseAddress(db, .readOnly)
+            let height = CVPixelBufferGetHeight(db)
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(db)
+            if let baseAddress = CVPixelBufferGetBaseAddress(db) {
+                depthData = Data(bytes: baseAddress, count: height * bytesPerRow)
+            }
+            CVPixelBufferUnlockBaseAddress(db, .readOnly)
+        }
+        
+        savingQueue.async {
             // Save Image using UIKit
-            if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                let uiImage = UIImage(cgImage: cgImage)
+            if let cgImg = cgImage {
+                let uiImage = UIImage(cgImage: cgImg)
                 if let jpegData = uiImage.jpegData(compressionQuality: 0.9) {
                     try? jpegData.write(to: imageUrl)
                 }
             }
             
             // Save Depth Map
-            if let db = depthBuffer {
-                CVPixelBufferLockBaseAddress(db, .readOnly)
-                let height = CVPixelBufferGetHeight(db)
-                let bytesPerRow = CVPixelBufferGetBytesPerRow(db)
-                if let baseAddress = CVPixelBufferGetBaseAddress(db) {
-                    let data = Data(bytes: baseAddress, count: height * bytesPerRow)
-                    try? data.write(to: depthUrl)
-                }
-                CVPixelBufferUnlockBaseAddress(db, .readOnly)
+            if let data = depthData {
+                try? data.write(to: depthUrl)
             }
         }
     }

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobilscan 3D Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 15px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        h1 { margin: 0 0 10px 0; font-size: 20px; color: #34d399; }
+        p { margin: 5px 0; font-size: 14px; color: #ccc; }
+        .controls { color: #60a5fa; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h1>Mobilscan 3D Bejárás</h1>
+        <p>Mozgás: <span class="controls">W A S D</span></p>
+        <p>Nézelődés: <span class="controls">Egér kattintás + Húzás</span></p>
+        <p>Fel / Le: <span class="controls">Q / E</span></p>
+    </div>
+    <div id="canvas-container"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.157.0/examples/jsm/",
+            "@lumaai/luma-web": "https://unpkg.com/@lumaai/luma-web@0.2.0/dist/library/luma-web.module.js"
+        }
+    }
+    </script>
+    
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { LumaSplatsThree } from '@lumaai/luma-web';
+
+        // Get jobId from URL, e.g. ?jobId=123
+        const urlParams = new URLSearchParams(window.location.search);
+        const jobId = urlParams.get('jobId') || 'demo';
+        
+        // Setup Three.js scene
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 1.6, 2); // Average human height
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // Load the Splat (Gaussian Splatting file)
+        // In reality, this would point to our FastAPI endpoint: `http://192.168.0.100:8000/download/${jobId}`
+        // Using a placeholder Luma URL for demo if no jobId is provided
+        const splatUrl = jobId === 'demo' 
+            ? 'https://lumalabs.ai/capture/d80d4876-cf71-4b8a-8b5b-49ffac44cd4a' // Luma Demo
+            : `http://localhost:8000/download/${jobId}`; 
+            
+        let splat = new LumaSplatsThree({
+            source: splatUrl,
+            loadingAnimationEnabled: true,
+        });
+        scene.add(splat);
+
+        // Setup FPS Controls (WASD)
+        const controls = new PointerLockControls(camera, renderer.domElement);
+        
+        document.addEventListener('click', () => {
+            controls.lock();
+        });
+
+        // Movement state
+        const move = { forward: false, backward: false, left: false, right: false, up: false, down: false };
+        const speed = 0.05;
+
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'KeyW': move.forward = true; break;
+                case 'KeyS': move.backward = true; break;
+                case 'KeyA': move.left = true; break;
+                case 'KeyD': move.right = true; break;
+                case 'KeyQ': move.up = true; break;
+                case 'KeyE': move.down = true; break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'KeyW': move.forward = false; break;
+                case 'KeyS': move.backward = false; break;
+                case 'KeyA': move.left = false; break;
+                case 'KeyD': move.right = false; break;
+                case 'KeyQ': move.up = false; break;
+                case 'KeyE': move.down = false; break;
+            }
+        });
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (controls.isLocked) {
+                // Determine movement direction relative to camera
+                if (move.forward) controls.moveForward(speed);
+                if (move.backward) controls.moveForward(-speed);
+                if (move.left) controls.moveRight(-speed);
+                if (move.right) controls.moveRight(speed);
+                if (move.up) camera.position.y += speed;
+                if (move.down) camera.position.y -= speed;
+            }
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

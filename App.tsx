@@ -1,12 +1,23 @@
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import { zip } from 'react-native-zip-archive';
 import LidarScannerView from './modules/lidar-scanner/src/LidarScannerView';
 import LidarScannerModule from './modules/lidar-scanner/src/LidarScannerModule';
+
+// TODO: Ide másold be a 'modal serve backend/modal_app.py' által generált URL-t!
+// Például: const API_URL = 'https://te-neved--mobilscan-backend-fastapi-app-dev.modal.run';
+const API_URL = 'https://<IDE_MASOLD_A_MODAL_URL-T>';
 
 export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
+  
+  // Állapotok a feldolgozáshoz
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processStatus, setProcessStatus] = useState<string>('');
+  const [completedJobId, setCompletedJobId] = useState<string | null>(null);
 
   const handleClearData = async () => {
     Alert.alert(
@@ -20,6 +31,7 @@ export default function App() {
           onPress: async () => {
             try {
               await LidarScannerModule.clearData();
+              setCompletedJobId(null);
               Alert.alert("Siker", "A korábbi adatok törölve lettek.");
             } catch (error) {
               Alert.alert("Hiba", "Nem sikerült törölni az adatokat.");
@@ -30,6 +42,113 @@ export default function App() {
     );
   };
 
+  const findLatestScanDir = async () => {
+    try {
+      if (!FileSystem.documentDirectory) return null;
+      const files = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory);
+      const scanDirs = files.filter(f => f.startsWith('Scan_')).sort().reverse();
+      if (scanDirs.length > 0) {
+        return FileSystem.documentDirectory + scanDirs[0];
+      }
+      return null;
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  };
+
+  const uploadAndProcessScan = async () => {
+    setIsProcessing(true);
+    setProcessStatus('Fájlok tömörítése...');
+    
+    try {
+      // 1. Keresd meg a legújabb szkennelést
+      const latestScanDir = await findLatestScanDir();
+      if (!latestScanDir) {
+        throw new Error('Nem található mentett szkennelés.');
+      }
+
+      // 2. Zipeljük be a mappát
+      const targetZipPath = FileSystem.cacheDirectory + 'upload_scan.zip';
+      await zip(latestScanDir, targetZipPath);
+
+      setProcessStatus('Feltöltés a felhőbe...');
+
+      // 3. Feltöltés a FastAPI szerverre
+      const fileInfo = await FileSystem.getInfoAsync(targetZipPath);
+      if (!fileInfo.exists) throw new Error('Zip fájl nem jött létre.');
+
+      const uploadResult = await FileSystem.uploadAsync(
+        `${API_URL}/upload`,
+        targetZipPath,
+        {
+          fieldName: 'file',
+          httpMethod: 'POST',
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        }
+      );
+
+      if (uploadResult.status !== 200) {
+        throw new Error(`Szerver hiba: ${uploadResult.status}`);
+      }
+
+      const responseData = JSON.parse(uploadResult.body);
+      const jobId = responseData.job_id;
+
+      // 4. Státusz lekérdezése (Polling)
+      pollJobStatus(jobId);
+
+    } catch (error: any) {
+      Alert.alert('Hiba', error.message);
+      setIsProcessing(false);
+    }
+  };
+
+  const pollJobStatus = (jobId: string) => {
+    setProcessStatus('3D Modell tanulása (Gaussian Splatting)...');
+    
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`${API_URL}/status/${jobId}`);
+        const data = await response.json();
+        
+        if (data.status === 'completed') {
+          clearInterval(interval);
+          setCompletedJobId(jobId);
+          setIsProcessing(false);
+          Alert.alert('Kész!', 'A valósághű 3D modell sikeresen elkészült.');
+        } else if (data.status === 'failed') {
+          clearInterval(interval);
+          setIsProcessing(false);
+          Alert.alert('Hiba', 'A feldolgozás sikertelen volt a szerveren.');
+        }
+      } catch (error) {
+        console.error('Polling error:', error);
+      }
+    }, 3000);
+  };
+
+  const handleStopScanning = async () => {
+    setIsScanning(false);
+    setFrameCount(0);
+    // Várunk picit, hogy a Swift kód biztosan elmentse a transforms.json-t
+    setTimeout(() => {
+      uploadAndProcessScan();
+    }, 1000);
+  };
+
+  if (isProcessing) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerAll]}>
+        <ActivityIndicator size="large" color="#0a84ff" style={{ marginBottom: 20 }} />
+        <Text style={styles.title}>Feldolgozás folyamatban</Text>
+        <Text style={styles.subtitle}>{processStatus}</Text>
+        <Text style={styles.instructionText}>Kérlek, ne zárd be az alkalmazást.</Text>
+        <StatusBar style="light" />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={StyleSheet.absoluteFill}>
@@ -37,6 +156,10 @@ export default function App() {
           style={StyleSheet.absoluteFill} 
           isScanning={isScanning} 
           onFrameCaptured={(e) => setFrameCount(e.nativeEvent.frameCount)}
+          onError={(e) => {
+            Alert.alert("Hiba", e.nativeEvent.message);
+            setIsScanning(false);
+          }}
         />
       </View>
 
@@ -48,21 +171,15 @@ export default function App() {
             </View>
           </View>
           <View style={styles.overlay}>
-            <TouchableOpacity 
-              style={styles.stopButton} 
-              onPress={() => {
-                setIsScanning(false);
-                setFrameCount(0);
-              }}
-            >
-              <Text style={styles.buttonText}>Szkennelés leállítása</Text>
+            <TouchableOpacity style={styles.stopButton} onPress={handleStopScanning}>
+              <Text style={styles.buttonText}>Szkennelés befejezése és Feldolgozás</Text>
             </TouchableOpacity>
           </View>
         </View>
       ) : (
         <View style={[styles.homeContainer, { backgroundColor: '#1c1c1e' }]}>
           <Text style={styles.title}>Mobilscan</Text>
-          <Text style={styles.subtitle}>LiDAR & Gaussian Splatting</Text>
+          <Text style={styles.subtitle}>Valósághű Ingatlan Szkennelés</Text>
           
           <TouchableOpacity 
             style={styles.startButton} 
@@ -71,19 +188,22 @@ export default function App() {
             <Text style={styles.buttonText}>Új szoba szkennelése</Text>
           </TouchableOpacity>
 
+          {completedJobId && (
+            <View style={styles.successContainer}>
+              <Text style={styles.successTitle}>Sikeresen feldolgozva!</Text>
+              <Text style={styles.instructionText}>
+                Másold be ezt a linket a PC-d böngészőjébe a WASD bejáráshoz:
+              </Text>
+              <Text style={styles.linkText}>{API_URL}/view/{completedJobId}</Text>
+            </View>
+          )}
+
           <TouchableOpacity 
             style={styles.clearButton} 
             onPress={handleClearData}
           >
             <Text style={styles.clearButtonText}>Korábbi adatok törlése</Text>
           </TouchableOpacity>
-
-          <View style={styles.instructionsContainer}>
-            <Text style={styles.instructionTitle}>Adatok letöltése gépre:</Text>
-            <Text style={styles.instructionText}>1. Csatlakoztasd a telefont vagy nyisd meg a "Fájlok" appot a telefonodon.</Text>
-            <Text style={styles.instructionText}>2. Keresd meg az "On My iPhone / Mobilscan" mappát.</Text>
-            <Text style={styles.instructionText}>3. Másold át a "Scan_..." mappákat a számítógépedre a Gaussian Splatting Colab számára.</Text>
-          </View>
         </View>
       )}
       <StatusBar style="light" />
@@ -96,6 +216,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#1c1c1e',
   },
+  centerAll: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
   homeContainer: {
     flex: 1,
     alignItems: 'center',
@@ -107,11 +232,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#ffffff',
     marginBottom: 10,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: '#a1a1aa',
-    marginBottom: 60,
+    marginBottom: 50,
+    textAlign: 'center',
   },
   startButton: {
     backgroundColor: '#0a84ff',
@@ -121,6 +248,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     width: '80%',
     alignItems: 'center',
+    shadowColor: '#0a84ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
   },
   clearButton: {
     backgroundColor: 'transparent',
@@ -129,6 +260,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 30,
     paddingVertical: 15,
     borderRadius: 25,
+    marginTop: 20,
     marginBottom: 40,
     width: '80%',
     alignItems: 'center',
@@ -146,9 +278,6 @@ const styles = StyleSheet.create({
   scannerContainer: {
     flex: 1,
     position: 'relative',
-  },
-  scanner: {
-    flex: 1,
   },
   overlayTop: {
     position: 'absolute',
@@ -177,27 +306,40 @@ const styles = StyleSheet.create({
   },
   stopButton: {
     backgroundColor: '#ef4444',
-    paddingHorizontal: 40,
+    paddingHorizontal: 30,
     paddingVertical: 18,
     borderRadius: 30,
-  },
-  instructionsContainer: {
-    backgroundColor: '#2c2c2e',
-    padding: 20,
-    borderRadius: 15,
-    width: '100%',
-    marginTop: 20,
-  },
-  instructionTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 10,
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
   },
   instructionText: {
     color: '#d4d4d8',
-    fontSize: 14,
+    fontSize: 15,
     marginBottom: 5,
-    lineHeight: 20,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  successContainer: {
+    backgroundColor: '#2c2c2e',
+    padding: 20,
+    borderRadius: 15,
+    width: '90%',
+    marginTop: 10,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  successTitle: {
+    color: '#34d399',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  linkText: {
+    color: '#60a5fa',
+    fontSize: 16,
+    marginTop: 10,
+    fontWeight: 'bold',
   }
 });

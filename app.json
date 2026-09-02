@@ -36,6 +36,9 @@
       "eas": {
         "projectId": "69c0b3cf-15b0-44e0-bc11-39cf5503618e"
       }
-    }
+    },
+    "plugins": [
+      "react-native-zip-archive"
+    ]
   }
 }
