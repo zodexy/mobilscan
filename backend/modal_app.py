@@ -15,7 +15,7 @@ from pydantic import BaseModel
 # We install Torch and Nerfstudio on top of an Ubuntu CUDA image
 image = (
     modal.Image.from_registry("nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04", add_python="3.10")
-    .apt_install("git", "wget", "ffmpeg", "libsm6", "libxext6")
+    .apt_install("git", "wget", "ffmpeg", "libsm6", "libxext6", "build-essential", "clang")
     .pip_install(
         "torch==2.1.2", "torchvision==0.16.2", 
         index_url="https://download.pytorch.org/whl/cu121"

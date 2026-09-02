@@ -8,12 +8,12 @@ import LidarScannerModule from './modules/lidar-scanner/src/LidarScannerModule';
 
 // TODO: Ide másold be a 'modal serve backend/modal_app.py' által generált URL-t!
 // Például: const API_URL = 'https://te-neved--mobilscan-backend-fastapi-app-dev.modal.run';
-const API_URL = 'https://<IDE_MASOLD_A_MODAL_URL-T>';
+const API_URL = 'https://zodexy--mobilscan-backend-fastapi-app.modal.run';
 
 export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [frameCount, setFrameCount] = useState(0);
-  
+
   // Állapotok a feldolgozáshoz
   const [isProcessing, setIsProcessing] = useState(false);
   const [processStatus, setProcessStatus] = useState<string>('');
@@ -25,8 +25,8 @@ export default function App() {
       "Biztosan törölni szeretnéd az összes eddigi mentett szkennelést a telefonról?",
       [
         { text: "Mégsem", style: "cancel" },
-        { 
-          text: "Törlés", 
+        {
+          text: "Törlés",
           style: "destructive",
           onPress: async () => {
             try {
@@ -60,7 +60,7 @@ export default function App() {
   const uploadAndProcessScan = async () => {
     setIsProcessing(true);
     setProcessStatus('Fájlok tömörítése...');
-    
+
     try {
       // 1. Keresd meg a legújabb szkennelést
       const latestScanDir = await findLatestScanDir();
@@ -106,12 +106,12 @@ export default function App() {
 
   const pollJobStatus = (jobId: string) => {
     setProcessStatus('3D Modell tanulása (Gaussian Splatting)...');
-    
+
     const interval = setInterval(async () => {
       try {
         const response = await fetch(`${API_URL}/status/${jobId}`);
         const data = await response.json();
-        
+
         if (data.status === 'completed') {
           clearInterval(interval);
           setCompletedJobId(jobId);
@@ -152,9 +152,9 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={StyleSheet.absoluteFill}>
-        <LidarScannerView 
-          style={StyleSheet.absoluteFill} 
-          isScanning={isScanning} 
+        <LidarScannerView
+          style={StyleSheet.absoluteFill}
+          isScanning={isScanning}
           onFrameCaptured={(e) => setFrameCount(e.nativeEvent.frameCount)}
           onError={(e) => {
             Alert.alert("Hiba", e.nativeEvent.message);
@@ -180,9 +180,9 @@ export default function App() {
         <View style={[styles.homeContainer, { backgroundColor: '#1c1c1e' }]}>
           <Text style={styles.title}>Mobilscan</Text>
           <Text style={styles.subtitle}>Valósághű Ingatlan Szkennelés</Text>
-          
-          <TouchableOpacity 
-            style={styles.startButton} 
+
+          <TouchableOpacity
+            style={styles.startButton}
             onPress={() => setIsScanning(true)}
           >
             <Text style={styles.buttonText}>Új szoba szkennelése</Text>
@@ -198,8 +198,8 @@ export default function App() {
             </View>
           )}
 
-          <TouchableOpacity 
-            style={styles.clearButton} 
+          <TouchableOpacity
+            style={styles.clearButton}
             onPress={handleClearData}
           >
             <Text style={styles.clearButtonText}>Korábbi adatok törlése</Text>
