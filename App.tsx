@@ -49,10 +49,13 @@ export default function App() {
       const scanDirs = files.filter(f => f.startsWith('Scan_')).sort().reverse();
       if (scanDirs.length > 0) {
         return FileSystem.documentDirectory + scanDirs[0];
+      } else {
+        Alert.alert("Debug Info", "Nincs Scan_ mappa. Fájlok a mappában: " + JSON.stringify(files));
       }
       return null;
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      Alert.alert("Hiba a mappa olvasásakor", error.message);
       return null;
     }
   };
