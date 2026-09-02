@@ -5,6 +5,7 @@ import zipfile
 import shutil
 import subprocess
 import struct
+import math
 import modal
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
@@ -144,10 +145,88 @@ def convert_arkit_to_nerfstudio(data_dir: str):
         out_data["frames"].append(out_frame)
         
     output_json_path = os.path.join(data_dir, "transforms.json")
+    
+    # GENERATE LIDAR POINT CLOUD FOR INITIALIZATION
+    print("Generating LiDAR point cloud for Splatfacto initialization...")
+    generate_point_cloud(data_dir, out_data)
+    
+    # Tell Nerfstudio to use the generated point cloud
+    out_data["ply_file_path"] = "sparse_pc.ply"
+    
     with open(output_json_path, 'w') as f:
         json.dump(out_data, f, indent=4)
         
     return data_dir
+
+def generate_point_cloud(data_dir: str, transforms_data: dict):
+    points = []
+    # Only sample a subset of pixels to keep the point cloud sparse and fast
+    subsample = 4
+    
+    for frame in transforms_data["frames"]:
+        depth_path = os.path.join(data_dir, frame["file_path"].replace("images", "depth").replace(".jpg", ".bin"))
+        if not os.path.exists(depth_path):
+            continue
+            
+        c2w = frame["transform_matrix"]
+        fl_x, fl_y = frame["fl_x"], frame["fl_y"]
+        cx, cy = frame["cx"], frame["cy"]
+        w, h = transforms_data["w"], transforms_data["h"]
+        
+        # ARKit depth maps are 256x192 (Landscape)
+        depth_w, depth_h = 256, 192
+        scale_x = depth_w / w
+        scale_y = depth_h / h
+        
+        try:
+            with open(depth_path, 'rb') as f:
+                depth_data = f.read()
+        except Exception:
+            continue
+            
+        # Float32 pixels
+        # 256x192 = 49152 floats = 196608 bytes. If bytesPerRow is padded, we must be careful.
+        # ARKit depth maps are usually exact.
+        floats = struct.unpack(f"<{len(depth_data)//4}f", depth_data)
+        
+        for v in range(0, depth_h, subsample):
+            for u in range(0, depth_w, subsample):
+                idx = v * depth_w + u
+                if idx >= len(floats):
+                    continue
+                z = floats[idx]
+                if z <= 0.1 or z > 5.0:  # Ignore very close or very far points
+                    continue
+                    
+                # Unproject
+                # We use the scaled intrinsics for the depth map
+                x = (u - (cx * scale_x)) * z / (fl_x * scale_x)
+                y = (v - (cy * scale_y)) * z / (fl_y * scale_y)
+                
+                # Camera coordinates (OpenCV: X right, Y down, Z forward)
+                # Apply c2w
+                px = c2w[0][0]*x + c2w[0][1]*y + c2w[0][2]*z + c2w[0][3]
+                py = c2w[1][0]*x + c2w[1][1]*y + c2w[1][2]*z + c2w[1][3]
+                pz = c2w[2][0]*x + c2w[2][1]*y + c2w[2][2]*z + c2w[2][3]
+                
+                points.append((px, py, pz))
+                
+    # Write PLY file
+    ply_path = os.path.join(data_dir, "sparse_pc.ply")
+    with open(ply_path, 'w') as f:
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {len(points)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("end_header\n")
+        for p in points:
+            # White points
+            f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f} 255 255 255\n")
 
 # 3. Serverless GPU Function for Processing
 @app.function(
@@ -294,6 +373,8 @@ async def view_splat(job_id: str):
             <p>Keringés: <span class="controls">Bal egérgomb + Húzás</span></p>
             <p>Mozgás (Pan): <span class="controls">Jobb egérgomb + Húzás</span></p>
             <p>Közelítés: <span class="controls">Görgő</span></p>
+            <br>
+            <a href="/download/{job_id}" style="display: inline-block; padding: 10px 15px; background: #34d399; color: black; text-decoration: none; font-weight: bold; border-radius: 5px;">.PLY fájl letöltése</a>
         </div>
         <div id="loading">.PLY letöltése és betöltése (ez eltarthat egy percig is)...</div>
         <div id="canvas-container"></div>
