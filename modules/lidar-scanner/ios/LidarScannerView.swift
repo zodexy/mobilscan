@@ -146,16 +146,23 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             }
             
             let faces = geometry.faces
+            let bytesPerIndex = faces.bytesPerIndex
+            // A triangle has 3 indices
+            let indexCountPerPrimitive = faces.indexCountPerPrimitive 
+            
             for i in 0..<faces.count {
-                let facePointer = faces.buffer.contents.advanced(by: faces.offset + (faces.stride * i))
+                // ARGeometryElement does not have 'offset' and 'stride'.
+                // The buffer is tightly packed: i * indexCountPerPrimitive * bytesPerIndex
+                let faceByteOffset = i * indexCountPerPrimitive * bytesPerIndex
+                let facePointer = faces.buffer.contents.advanced(by: faceByteOffset)
                 
-                if faces.bytesPerIndex == 2 {
+                if bytesPerIndex == 2 {
                     let indices = facePointer.assumingMemoryBound(to: Int16.self)
                     let v1 = Int(indices[0]) + vertexOffset
                     let v2 = Int(indices[1]) + vertexOffset
                     let v3 = Int(indices[2]) + vertexOffset
                     lines.append("f \(v1) \(v2) \(v3)")
-                } else if faces.bytesPerIndex == 4 {
+                } else if bytesPerIndex == 4 {
                     let indices = facePointer.assumingMemoryBound(to: Int32.self)
                     let v1 = Int(indices[0]) + vertexOffset
                     let v2 = Int(indices[1]) + vertexOffset
