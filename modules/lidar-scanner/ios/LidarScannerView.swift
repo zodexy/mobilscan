@@ -3,7 +3,7 @@ import ARKit
 import SceneKit
 import CoreImage
 import UIKit
-
+import Metal
 extension SCNGeometry {
     convenience init?(from meshGeometry: ARMeshGeometry) {
         let vertices = meshGeometry.vertices
