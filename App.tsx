@@ -146,10 +146,20 @@ export default function App() {
   const handleStopScanning = async () => {
     setIsScanning(false);
     setFrameCount(0);
-    // Várunk picit, hogy a Swift kód biztosan elmentse a transforms.json-t
-    setTimeout(() => {
-      uploadAndProcessScan();
-    }, 1000);
+    // Várunk picit, hogy a Swift kód biztosan elmentse a fájlokat (obj, json, stb)
+    setTimeout(async () => {
+      try {
+        const latestScanDir = await findLatestScanDir();
+        if (latestScanDir) {
+          Alert.alert(
+            'Kész!', 
+            `A szkennelés sikeresen mentve lett a telefonodra!\n\nEzt a mappát (benne a lidar_mesh.obj-vel) átmásolhatod a PC-dre a RealityCapture-hoz:\n\n${decodeURI(latestScanDir)}`
+          );
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }, 1500);
   };
 
   if (isProcessing) {
@@ -187,7 +197,7 @@ export default function App() {
           </View>
           <View style={styles.overlay}>
             <TouchableOpacity style={styles.stopButton} onPress={handleStopScanning}>
-              <Text style={styles.buttonText}>Szkennelés befejezése és Feldolgozás</Text>
+              <Text style={styles.buttonText}>Szkennelés befejezése és Mentés</Text>
             </TouchableOpacity>
           </View>
         </View>
