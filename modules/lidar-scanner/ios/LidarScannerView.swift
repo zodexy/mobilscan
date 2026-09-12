@@ -137,17 +137,17 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             let vertices = geometry.vertices
             for i in 0..<vertices.count {
-                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
+                let vertexPointer = vertices.buffer.contents.advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 
                 // Transform vertex to world space
-                let worldVertex = simd_mul(transform, SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0))
+                let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
                 lines.append("v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)")
             }
             
             let faces = geometry.faces
             for i in 0..<faces.count {
-                let facePointer = faces.buffer.contents().advanced(by: faces.offset + (faces.stride * i))
+                let facePointer = faces.buffer.contents.advanced(by: faces.offset + (faces.stride * i))
                 
                 if faces.bytesPerIndex == 2 {
                     let indices = facePointer.assumingMemoryBound(to: Int16.self)
