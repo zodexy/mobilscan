@@ -137,7 +137,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             let vertices = geometry.vertices
             for i in 0..<vertices.count {
-                let vertexPointer = vertices.buffer.contents.advanced(by: vertices.offset + (vertices.stride * i))
+                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 
                 // Transform vertex to world space
@@ -154,7 +154,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 // ARGeometryElement does not have 'offset' and 'stride'.
                 // The buffer is tightly packed: i * indexCountPerPrimitive * bytesPerIndex
                 let faceByteOffset = i * indexCountPerPrimitive * bytesPerIndex
-                let facePointer = faces.buffer.contents.advanced(by: faceByteOffset)
+                let facePointer = faces.buffer.contents().advanced(by: faceByteOffset)
                 
                 if bytesPerIndex == 2 {
                     let indices = facePointer.assumingMemoryBound(to: Int16.self)
