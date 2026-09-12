@@ -105,14 +105,70 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         arView.session.pause()
         isScanning = false
         
-        // Save transforms.json
-        if let scanDir = scanDir {
-            let jsonDict: [String: Any] = ["frames": transformsData]
-            if let jsonData = try? JSONSerialization.data(withJSONObject: jsonDict, options: .prettyPrinted) {
-                let jsonUrl = scanDir.appendingPathComponent("transforms.json")
-                try? jsonData.write(to: jsonUrl)
+        let currentAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
+        let currentScanDir = scanDir
+        let currentTransforms = transformsData
+        
+        savingQueue.async {
+            if let scanDir = currentScanDir {
+                // Save transforms.json
+                let jsonDict: [String: Any] = ["frames": currentTransforms]
+                if let jsonData = try? JSONSerialization.data(withJSONObject: jsonDict, options: .prettyPrinted) {
+                    let jsonUrl = scanDir.appendingPathComponent("transforms.json")
+                    try? jsonData.write(to: jsonUrl)
+                }
+                
+                // Save Lidar Mesh as OBJ for RealityCapture
+                self.exportMeshAsOBJ(anchors: currentAnchors, to: scanDir.appendingPathComponent("lidar_mesh.obj"))
             }
         }
+    }
+    
+    private func exportMeshAsOBJ(anchors: [ARMeshAnchor], to url: URL) {
+        var lines: [String] = []
+        // Optional pre-allocation to speed things up
+        lines.reserveCapacity(anchors.count * 10000)
+        
+        var vertexOffset = 1
+        
+        for anchor in anchors {
+            let geometry = anchor.geometry
+            let transform = anchor.transform
+            
+            let vertices = geometry.vertices
+            for i in 0..<vertices.count {
+                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
+                let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                
+                // Transform vertex to world space
+                let worldVertex = simd_mul(transform, SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0))
+                lines.append("v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)")
+            }
+            
+            let faces = geometry.faces
+            for i in 0..<faces.count {
+                let facePointer = faces.buffer.contents().advanced(by: faces.offset + (faces.stride * i))
+                
+                if faces.bytesPerIndex == 2 {
+                    let indices = facePointer.assumingMemoryBound(to: Int16.self)
+                    let v1 = Int(indices[0]) + vertexOffset
+                    let v2 = Int(indices[1]) + vertexOffset
+                    let v3 = Int(indices[2]) + vertexOffset
+                    lines.append("f \(v1) \(v2) \(v3)")
+                } else if faces.bytesPerIndex == 4 {
+                    let indices = facePointer.assumingMemoryBound(to: Int32.self)
+                    let v1 = Int(indices[0]) + vertexOffset
+                    let v2 = Int(indices[1]) + vertexOffset
+                    let v3 = Int(indices[2]) + vertexOffset
+                    lines.append("f \(v1) \(v2) \(v3)")
+                }
+            }
+            
+            vertexOffset += vertices.count
+        }
+        
+        let objText = lines.joined(separator: "\n")
+        try? objText.write(to: url, atomically: true, encoding: .utf8)
     }
     
     func setupDirectories() {
