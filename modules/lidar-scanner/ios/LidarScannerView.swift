@@ -36,11 +36,12 @@ extension SCNGeometry {
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
                 
-                var clip = viewProj * worldVertex
+                let clip = viewProj * worldVertex
                 if clip.w > 0 {
-                    let ndc = clip.xy / clip.w
-                    let u = (ndc.x * 0.5) + 0.5
-                    let v = 1.0 - ((ndc.y * 0.5) + 0.5)
+                    let ndcX = clip.x / clip.w
+                    let ndcY = clip.y / clip.w
+                    let u = (ndcX * 0.5) + 0.5
+                    let v = 1.0 - ((ndcY * 0.5) + 0.5)
                     
                     let px = Int(u * Float(rgbWidth))
                     let py = Int(v * Float(rgbHeight))
@@ -230,7 +231,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             let bytes = [UInt8](headerData)
             bytes.withUnsafeBufferPointer { buffer in
                 if let baseAddress = buffer.baseAddress {
-                    outputStream.write(baseAddress, maxLength: bytes.count)
+                    _ = outputStream.write(baseAddress, maxLength: bytes.count)
                 }
             }
         }
@@ -252,14 +253,15 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 let normal = normalPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 
                 // Transform normal to world space
-                let worldNormal = simd_normalize(simd_float3(transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)))
+                let normal4 = transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)
+                let worldNormal = simd_normalize(SIMD3<Float>(normal4.x, normal4.y, normal4.z))
                 
                 let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
                 if let lineData = line.data(using: .utf8) {
                     let bytes = [UInt8](lineData)
                     bytes.withUnsafeBufferPointer { buffer in
                         if let baseAddress = buffer.baseAddress {
-                            outputStream.write(baseAddress, maxLength: bytes.count)
+                            _ = outputStream.write(baseAddress, maxLength: bytes.count)
                         }
                     }
                 }
