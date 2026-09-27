@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreMedia
 import ExpoModulesCore
 import ARKit
 import SceneKit
@@ -146,7 +147,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                     if device.isExposureModeSupported(.custom) {
                         // 1/120 másodperc tökéletes kompromisszum: szinte nulla motion blur, de még kap elég fényt
                         let duration = CMTimeMake(value: 1, timescale: 120)
-                        let iso = min(device.activeFormat.maxISO, 800) // Magasabb ISO, hogy ne legyen túl sötét
+                        let iso = min(device.activeFormat.maxISO, 800.0) // Magasabb ISO, hogy ne legyen túl sötét
                         device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
                         print("Kamera záridő sikeresen beállítva: 1/120s a(z) \(device.localizedName) eszközön")
                     }
@@ -251,7 +252,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 let normal = normalPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 
                 // Transform normal to world space
-                let worldNormal = simd_normalize(simd_make_float3(transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)))
+                let worldNormal = simd_normalize(simd_float3(transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)))
                 
                 let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
                 if let lineData = line.data(using: .utf8) {
