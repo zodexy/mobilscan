@@ -225,7 +225,11 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         if let headerData = header.data(using: .utf8) {
             let bytes = [UInt8](headerData)
-            outputStream.write(bytes, maxLength: bytes.count)
+            bytes.withUnsafeBufferPointer { buffer in
+                if let baseAddress = buffer.baseAddress {
+                    outputStream.write(baseAddress, maxLength: bytes.count)
+                }
+            }
         }
         
         for anchor in anchors {
@@ -250,7 +254,11 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
                 if let lineData = line.data(using: .utf8) {
                     let bytes = [UInt8](lineData)
-                    outputStream.write(bytes, maxLength: bytes.count)
+                    bytes.withUnsafeBufferPointer { buffer in
+                        if let baseAddress = buffer.baseAddress {
+                            outputStream.write(baseAddress, maxLength: bytes.count)
+                        }
+                    }
                 }
             }
         }
