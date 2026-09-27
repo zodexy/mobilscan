@@ -39,7 +39,7 @@ extension SCNGeometry {
         var sources = [vertexSource, normalSource]
         
         if let transform = nodeTransform, let cam = camera, let data = rgbData, rgbWidth > 0, rgbHeight > 0 {
-            var colorData = Data(capacity: vertices.count * 3)
+            var colorData = Data(capacity: vertices.count * 4)
             let viewMat = cam.viewMatrix(for: .landscapeRight)
             let projMat = cam.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: rgbWidth, height: rgbHeight), zNear: 0.001, zFar: 1000)
             let viewProj = projMat * viewMat
@@ -47,9 +47,10 @@ extension SCNGeometry {
             let bytes = [UInt8](data)
             
             for i in 0..<vertices.count {
-                var r: UInt8 = 180
-                var g: UInt8 = 180
-                var b: UInt8 = 180
+                var r: UInt8 = 0
+                var g: UInt8 = 0
+                var b: UInt8 = 0
+                var a: UInt8 = 0 // Fully transparent by default
                 
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
@@ -71,10 +72,10 @@ extension SCNGeometry {
                     if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
                         let offset = (py * rgbWidth + px) * 4
                         if offset + 2 < bytes.count {
-                            // CGContext creates perfect RGBA bytes
                             r = bytes[offset]
                             g = bytes[offset + 1]
                             b = bytes[offset + 2]
+                            a = 255
                             coloredFromCamera = true
                             
                             if let grid = colorGrid {
@@ -89,14 +90,16 @@ extension SCNGeometry {
                         r = savedColor.x
                         g = savedColor.y
                         b = savedColor.z
+                        a = 255
                     }
                 }
                 
                 colorData.append(r)
                 colorData.append(g)
                 colorData.append(b)
+                colorData.append(a)
             }
-            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: false, componentsPerVector: 3, bytesPerComponent: 1, dataOffset: 0, dataStride: 3)
+            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: false, componentsPerVector: 4, bytesPerComponent: 1, dataOffset: 0, dataStride: 4)
             sources.append(colorSource)
         }
         
@@ -427,9 +430,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return nil }
         
         let material = SCNMaterial()
-        material.isDoubleSided = false
-        material.fillMode = .fill 
-        // SCNMaterial automatically uses vertex colors when provided
+        material.isDoubleSided = true
+        material.lightingModel = .constant // No shading, pure color like 3DGS!
+        material.transparencyMode = .dualLayer
         
         geometry.firstMaterial = material
         return SCNNode(geometry: geometry)
@@ -440,8 +443,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return }
         
         let material = SCNMaterial()
-        material.isDoubleSided = false
-        material.fillMode = .fill
+        material.isDoubleSided = true
+        material.lightingModel = .constant // No shading, pure color like 3DGS!
+        material.transparencyMode = .dualLayer
         
         geometry.firstMaterial = material
         node.geometry = geometry
