@@ -5,7 +5,7 @@ import CoreImage
 import UIKit
 import Metal
 extension SCNGeometry {
-    convenience init?(from meshGeometry: ARMeshGeometry) {
+    convenience init?(from meshGeometry: ARMeshGeometry, nodeTransform: simd_float4x4? = nil, camera: ARCamera? = nil, rgbData: Data? = nil, rgbWidth: Int = 0, rgbHeight: Int = 0) {
         let vertices = meshGeometry.vertices
         let normals = meshGeometry.normals
         let faces = meshGeometry.faces
@@ -14,7 +14,57 @@ extension SCNGeometry {
         let normalSource = SCNGeometrySource(buffer: normals.buffer, vertexFormat: normals.format, semantic: .normal, vertexCount: normals.count, dataOffset: normals.offset, dataStride: normals.stride)
         let geometryElement = SCNGeometryElement(buffer: faces.buffer, primitiveType: .triangles, primitiveCount: faces.count, bytesPerIndex: faces.bytesPerIndex)
         
-        self.init(sources: [vertexSource, normalSource], elements: [geometryElement])
+        var sources = [vertexSource, normalSource]
+        
+        if let transform = nodeTransform, let cam = camera, let data = rgbData, rgbWidth > 0, rgbHeight > 0 {
+            var colorData = Data(capacity: vertices.count * 3)
+            let viewMat = cam.viewMatrix(for: .landscapeRight)
+            let projMat = cam.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: rgbWidth, height: rgbHeight), zNear: 0.001, zFar: 1000)
+            let viewProj = projMat * viewMat
+            
+            data.withUnsafeBytes { ptr in
+                let bytes = ptr.bindMemory(to: UInt8.self).baseAddress
+                for i in 0..<vertices.count {
+                    var r: UInt8 = 180
+                    var g: UInt8 = 180
+                    var b: UInt8 = 180
+                    
+                    if let bytes = bytes {
+                        let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
+                        let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                        let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
+                        
+                        var clip = viewProj * worldVertex
+                        if clip.w > 0 {
+                            let ndc = clip.xy / clip.w
+                            let u = (ndc.x * 0.5) + 0.5
+                            let v = 1.0 - ((ndc.y * 0.5) + 0.5)
+                            
+                            let px = Int(u * Float(rgbWidth))
+                            let py = Int(v * Float(rgbHeight))
+                            
+                            if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
+                                // Add bounds check in case CGImage has padding (bytesPerRow > width * 4)
+                                // Ideally we'd use bytesPerRow, but this is a safe fallback for the "painting" effect.
+                                let offset = (py * rgbWidth + px) * 4
+                                if offset + 2 < data.count {
+                                    b = bytes[offset]
+                                    g = bytes[offset + 1]
+                                    r = bytes[offset + 2]
+                                }
+                            }
+                        }
+                    }
+                    colorData.append(r)
+                    colorData.append(g)
+                    colorData.append(b)
+                }
+            }
+            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: false, componentsPerVector: 3, bytesPerComponent: 1, dataOffset: 0, dataStride: 3)
+            sources.append(colorSource)
+        }
+        
+        self.init(sources: sources, elements: [geometryElement])
     }
 }
 
@@ -28,10 +78,18 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     var scanDir: URL?
     var transformsData: [[String: Any]] = []
     var frameIndex = 0
+    var cameraResolution: CGSize = .zero
+    var cameraIntrinsics: simd_float3x3 = matrix_identity_float3x3
     let savingQueue = DispatchQueue(label: "com.mobilscan.savingQueue")
     
     // CoreImage context for converting CVPixelBuffer to JPEG
     let ciContext = CIContext()
+    
+    // State for live colorization
+    var latestRGBData: Data?
+    var latestRGBWidth: Int = 0
+    var latestRGBHeight: Int = 0
+    var latestCamera: ARCamera?
     
     let onFrameCaptured = EventDispatcher()
     let onError = EventDispatcher()
@@ -44,7 +102,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         arView.delegate = self
         arView.session.delegate = self
         
-        // Disable feature points, we will draw the blue mesh instead
+        // Disable feature points, we will draw the mesh
         arView.debugOptions = []
         
         addSubview(arView)
@@ -91,91 +149,119 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                         let duration = CMTimeMake(value: 1, timescale: 120)
                         let iso = min(device.activeFormat.maxISO, 800) // Magasabb ISO, hogy ne legyen túl sötét
                         device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
-                        print("Kamera záridő sikeresen beállítva: 1/120s a(z) \(device.localizedName) eszközön")
+                        print("Kamera záridő sikeresen beállítva: 1/120s a(z) \\(device.localizedName) eszközön")
                     }
                     device.unlockForConfiguration()
                 } catch {
-                    print("Nem sikerült zárolni a kamerát: \(error)")
+                    print("Nem sikerült zárolni a kamerát: \\(error)")
                 }
             }
         }
     }
     
     func stopScanning() {
-        arView.session.pause()
         isScanning = false
-        
         let currentAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
+        arView.session.pause()
+        
         let currentScanDir = scanDir
         let currentTransforms = transformsData
         
         savingQueue.async {
             if let scanDir = currentScanDir {
+                let fl_x = self.cameraIntrinsics.columns.0.x
+                let fl_y = self.cameraIntrinsics.columns.1.y
+                let cx = self.cameraIntrinsics.columns.2.x
+                let cy = self.cameraIntrinsics.columns.2.y
+                let w = self.cameraResolution.width
+                let h = self.cameraResolution.height
+                
                 // Save transforms.json
-                let jsonDict: [String: Any] = ["frames": currentTransforms]
+                let jsonDict: [String: Any] = [
+                    "camera_model": "OPENCV",
+                    "w": w,
+                    "h": h,
+                    "fl_x": fl_x,
+                    "fl_y": fl_y,
+                    "cx": cx,
+                    "cy": cy,
+                    "frames": currentTransforms
+                ]
+                
                 if let jsonData = try? JSONSerialization.data(withJSONObject: jsonDict, options: .prettyPrinted) {
                     let jsonUrl = scanDir.appendingPathComponent("transforms.json")
                     try? jsonData.write(to: jsonUrl)
                 }
                 
-                // Save Lidar Mesh as OBJ for RealityCapture
-                self.exportMeshAsOBJ(anchors: currentAnchors, to: scanDir.appendingPathComponent("lidar_mesh.obj"))
+                // Save Lidar Mesh as PLY for 2DGS/3DGS initialization
+                self.exportMeshAsPLY(anchors: currentAnchors, to: scanDir.appendingPathComponent("sparse_pc.ply"))
             }
         }
     }
     
-    private func exportMeshAsOBJ(anchors: [ARMeshAnchor], to url: URL) {
-        var lines: [String] = []
-        // Optional pre-allocation to speed things up
-        lines.reserveCapacity(anchors.count * 10000)
+    private func exportMeshAsPLY(anchors: [ARMeshAnchor], to url: URL) {
+        guard let outputStream = OutputStream(url: url, append: false) else { return }
+        outputStream.open()
+        defer { outputStream.close() }
         
-        var vertexOffset = 1
+        var totalVertices = 0
+        for anchor in anchors {
+            totalVertices += anchor.geometry.vertices.count
+        }
+        
+        let header = """
+        ply
+        format ascii 1.0
+        element vertex \(totalVertices)
+        property float x
+        property float y
+        property float z
+        property float nx
+        property float ny
+        property float nz
+        property uchar red
+        property uchar green
+        property uchar blue
+        end_header\n
+        """
+        
+        if let headerData = header.data(using: .utf8) {
+            headerData.withUnsafeBytes { ptr in
+                if let baseAddress = ptr.bindMemory(to: UInt8.self).baseAddress {
+                    outputStream.write(baseAddress, maxLength: headerData.count)
+                }
+            }
+        }
         
         for anchor in anchors {
             let geometry = anchor.geometry
             let transform = anchor.transform
-            
             let vertices = geometry.vertices
+            let normals = geometry.normals
+            
             for i in 0..<vertices.count {
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 
                 // Transform vertex to world space
                 let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
-                lines.append("v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)")
-            }
-            
-            let faces = geometry.faces
-            let bytesPerIndex = faces.bytesPerIndex
-            // A triangle has 3 indices
-            let indexCountPerPrimitive = faces.indexCountPerPrimitive 
-            
-            for i in 0..<faces.count {
-                // ARGeometryElement does not have 'offset' and 'stride'.
-                // The buffer is tightly packed: i * indexCountPerPrimitive * bytesPerIndex
-                let faceByteOffset = i * indexCountPerPrimitive * bytesPerIndex
-                let facePointer = faces.buffer.contents().advanced(by: faceByteOffset)
                 
-                if bytesPerIndex == 2 {
-                    let indices = facePointer.assumingMemoryBound(to: Int16.self)
-                    let v1 = Int(indices[0]) + vertexOffset
-                    let v2 = Int(indices[1]) + vertexOffset
-                    let v3 = Int(indices[2]) + vertexOffset
-                    lines.append("f \(v1) \(v2) \(v3)")
-                } else if bytesPerIndex == 4 {
-                    let indices = facePointer.assumingMemoryBound(to: Int32.self)
-                    let v1 = Int(indices[0]) + vertexOffset
-                    let v2 = Int(indices[1]) + vertexOffset
-                    let v3 = Int(indices[2]) + vertexOffset
-                    lines.append("f \(v1) \(v2) \(v3)")
+                let normalPointer = normals.buffer.contents().advanced(by: normals.offset + (normals.stride * i))
+                let normal = normalPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                
+                // Transform normal to world space
+                let worldNormal = simd_normalize(simd_make_float3(transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)))
+                
+                let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
+                if let lineData = line.data(using: .utf8) {
+                    lineData.withUnsafeBytes { ptr in
+                        if let baseAddress = ptr.bindMemory(to: UInt8.self).baseAddress {
+                            outputStream.write(baseAddress, maxLength: lineData.count)
+                        }
+                    }
                 }
             }
-            
-            vertexOffset += vertices.count
         }
-        
-        let objText = lines.joined(separator: "\n")
-        try? objText.write(to: url, atomically: true, encoding: .utf8)
     }
     
     func setupDirectories() {
@@ -185,19 +271,17 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         let fileManager = FileManager.default
         let documentDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        scanDir = documentDirectory.appendingPathComponent("Scan_\(dateStr)", isDirectory: true)
+        scanDir = documentDirectory.appendingPathComponent("Scan_\\(dateStr)", isDirectory: true)
         
         guard let scanDir = scanDir else { return }
         
         let imagesDir = scanDir.appendingPathComponent("images", isDirectory: true)
-        let depthDir = scanDir.appendingPathComponent("depth", isDirectory: true)
         
         do {
             try fileManager.createDirectory(at: scanDir, withIntermediateDirectories: true, attributes: nil)
             try fileManager.createDirectory(at: imagesDir, withIntermediateDirectories: true, attributes: nil)
-            try fileManager.createDirectory(at: depthDir, withIntermediateDirectories: true, attributes: nil)
         } catch {
-            print("Error creating directories: \(error)")
+            print("Error creating directories: \\(error)")
         }
         
         transformsData.removeAll()
@@ -227,45 +311,34 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             "frameCount": currentIndex
         ])
         
-        // We must copy data we want to process in the background
         let pixelBuffer = frame.capturedImage
-        let depthBuffer = frame.sceneDepth?.depthMap
         let transform = frame.camera.transform
         let intrinsics = frame.camera.intrinsics
         
-        // Convert SIMD matrices to nested arrays for JSON
-        let transformArray = [
-            [transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w],
-            [transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w],
-            [transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w],
-            [transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w]
-        ]
+        if currentIndex == 0 {
+            cameraIntrinsics = intrinsics
+            cameraResolution = frame.camera.imageResolution
+        }
         
-        let intrinsicsArray = [
-            [intrinsics.columns.0.x, intrinsics.columns.0.y, intrinsics.columns.0.z],
-            [intrinsics.columns.1.x, intrinsics.columns.1.y, intrinsics.columns.1.z],
-            [intrinsics.columns.2.x, intrinsics.columns.2.y, intrinsics.columns.2.z]
+        // Convert SIMD matrices to row-major nested arrays for JSON (Nerfstudio format)
+        let transformArray = [
+            [transform.columns.0.x, transform.columns.1.x, transform.columns.2.x, transform.columns.3.x],
+            [transform.columns.0.y, transform.columns.1.y, transform.columns.2.y, transform.columns.3.y],
+            [transform.columns.0.z, transform.columns.1.z, transform.columns.2.z, transform.columns.3.z],
+            [transform.columns.0.w, transform.columns.1.w, transform.columns.2.w, transform.columns.3.w]
         ]
         
         let imageName = String(format: "%04d.jpg", currentIndex)
-        let depthName = String(format: "%04d.bin", currentIndex)
         
-        var frameDict: [String: Any] = [
-            "file_path": "images/\(imageName)",
-            "transform_matrix": transformArray,
-            "intrinsics_matrix": intrinsicsArray
+        let frameDict: [String: Any] = [
+            "file_path": "images/\\(imageName)",
+            "transform_matrix": transformArray
         ]
-        
-        if depthBuffer != nil {
-            frameDict["depth_path"] = "depth/\(depthName)"
-        }
         
         transformsData.append(frameDict)
         
         let imagesDir = scanDir.appendingPathComponent("images")
-        let depthDir = scanDir.appendingPathComponent("depth")
         let imageUrl = imagesDir.appendingPathComponent(imageName)
-        let depthUrl = depthDir.appendingPathComponent(depthName)
         
         // Convert to CIImage immediately on the AR thread
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
@@ -273,16 +346,16 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         // Create CGImage synchronously so the pixel buffer is no longer needed by the background thread
         let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent)
         
-        // Extract depth data synchronously
-        var depthData: Data? = nil
-        if let db = depthBuffer {
-            CVPixelBufferLockBaseAddress(db, .readOnly)
-            let height = CVPixelBufferGetHeight(db)
-            let bytesPerRow = CVPixelBufferGetBytesPerRow(db)
-            if let baseAddress = CVPixelBufferGetBaseAddress(db) {
-                depthData = Data(bytes: baseAddress, count: height * bytesPerRow)
+        // Setup live colorization data (low-res)
+        let scale = 120.0 / CGFloat(max(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer)))
+        let scaledCI = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        if let smallCgImg = self.ciContext.createCGImage(scaledCI, from: scaledCI.extent) {
+            self.latestRGBWidth = smallCgImg.width
+            self.latestRGBHeight = smallCgImg.height
+            self.latestCamera = frame.camera
+            if let dataProvider = smallCgImg.dataProvider, let data = dataProvider.data {
+                self.latestRGBData = Data(referencing: data)
             }
-            CVPixelBufferUnlockBaseAddress(db, .readOnly)
         }
         
         savingQueue.async {
@@ -293,11 +366,6 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                     try? jpegData.write(to: imageUrl)
                 }
             }
-            
-            // Save Depth Map
-            if let data = depthData {
-                try? data.write(to: depthUrl)
-            }
         }
     }
     
@@ -305,12 +373,12 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return nil }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry) else { return nil }
+        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight) else { return nil }
         
         let material = SCNMaterial()
-        material.diffuse.contents = UIColor.systemBlue.withAlphaComponent(0.5)
-        material.isDoubleSided = true
-        material.fillMode = .lines // Wireframe looks very cool for LiDAR meshes
+        material.isDoubleSided = false
+        material.fillMode = .fill 
+        // SCNMaterial automatically uses vertex colors when provided
         
         geometry.firstMaterial = material
         return SCNNode(geometry: geometry)
@@ -318,12 +386,11 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry) else { return }
+        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight) else { return }
         
         let material = SCNMaterial()
-        material.diffuse.contents = UIColor.systemBlue.withAlphaComponent(0.5)
-        material.isDoubleSided = true
-        material.fillMode = .lines
+        material.isDoubleSided = false
+        material.fillMode = .fill
         
         geometry.firstMaterial = material
         node.geometry = geometry

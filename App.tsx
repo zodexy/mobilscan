@@ -2,6 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView, Alert, ActivityIndicator } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { zip } from 'react-native-zip-archive';
 import LidarScannerView from './modules/lidar-scanner/src/LidarScannerView';
 import LidarScannerModule from './modules/lidar-scanner/src/LidarScannerModule';
@@ -17,7 +18,6 @@ export default function App() {
   // Állapotok a feldolgozáshoz
   const [isProcessing, setIsProcessing] = useState(false);
   const [processStatus, setProcessStatus] = useState<string>('');
-  const [completedJobId, setCompletedJobId] = useState<string | null>(null);
 
   const handleClearData = async () => {
     Alert.alert(
@@ -31,7 +31,6 @@ export default function App() {
           onPress: async () => {
             try {
               await LidarScannerModule.clearData();
-              setCompletedJobId(null);
               Alert.alert("Siker", "A korábbi adatok törölve lettek.");
             } catch (error) {
               Alert.alert("Hiba", "Nem sikerült törölni az adatokat.");
@@ -58,89 +57,49 @@ export default function App() {
     }
   };
 
-  const uploadAndProcessScan = async () => {
+  const exportScanAsZip = async () => {
     setIsProcessing(true);
-    setProcessStatus('Fájlok tömörítése...');
+    setProcessStatus('Adatok tömörítése és előkészítése...');
 
     try {
-      // 1. Keresd meg a legújabb szkennelést
       const latestScanDir = await findLatestScanDir();
       if (!latestScanDir) {
-        throw new Error('Nem található mentett szkennelés.');
+        throw new Error('Nincs korábbi szkennelés a telefonon.');
       }
 
-      // Tisztítsuk meg a forrás útvonalat
       let cleanSourcePath = decodeURI(latestScanDir).replace('file://', '');
       if (cleanSourcePath.endsWith('/')) {
         cleanSourcePath = cleanSourcePath.slice(0, -1);
       }
       
-      // A cél útvonal legyen pontosan ugyanott, csak .zip kiterjesztéssel! 
-      // Így egyáltalán nem függünk az expo-file-system hibás változóitól.
       let cleanTargetPath = cleanSourcePath + '.zip';
       
       try {
         await zip(cleanSourcePath, cleanTargetPath);
       } catch (zipError: any) {
-        throw new Error(`Zip hiba: ${zipError.message}\nSrc: ${cleanSourcePath}\nTgt: ${cleanTargetPath}`);
+        throw new Error(`Zip hiba: ${zipError.message}`);
       }
 
-      setProcessStatus('Feltöltés a felhőbe...');
-
       const fileUriForUpload = 'file://' + cleanTargetPath;
-
-      // 3. Feltöltés a FastAPI szerverre
       const fileInfo = await FileSystem.getInfoAsync(fileUriForUpload);
       if (!fileInfo.exists) throw new Error('Zip fájl nem jött létre.');
 
-      const uploadResult = await FileSystem.uploadAsync(
-        `${API_URL}/upload`,
-        fileUriForUpload,
-        {
-          fieldName: 'file',
-          httpMethod: 'POST',
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-        }
-      );
-
-      if (uploadResult.status !== 200) {
-        throw new Error(`Szerver hiba: ${uploadResult.status}`);
+      setIsProcessing(false);
+      
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUriForUpload, {
+          mimeType: 'application/zip',
+          dialogTitle: 'Szkennelés exportálása (2DGS/3DGS-hez)',
+          UTI: 'public.zip-archive'
+        });
+      } else {
+        Alert.alert("Hiba", "A megosztás (iOS Share Sheet) nem támogatott ezen az eszközön.");
       }
-
-      const responseData = JSON.parse(uploadResult.body);
-      const jobId = responseData.job_id;
-
-      // 4. Státusz lekérdezése (Polling)
-      pollJobStatus(jobId);
 
     } catch (error: any) {
       Alert.alert('Hiba', error.message);
       setIsProcessing(false);
     }
-  };
-
-  const pollJobStatus = (jobId: string) => {
-    setProcessStatus('3D Modell tanulása (Gaussian Splatting)...');
-
-    const interval = setInterval(async () => {
-      try {
-        const response = await fetch(`${API_URL}/status/${jobId}`);
-        const data = await response.json();
-
-        if (data.status === 'completed') {
-          clearInterval(interval);
-          setCompletedJobId(jobId);
-          setIsProcessing(false);
-          Alert.alert('Kész!', 'A valósághű 3D modell sikeresen elkészült.');
-        } else if (data.status === 'failed') {
-          clearInterval(interval);
-          setIsProcessing(false);
-          Alert.alert('Hiba', 'A feldolgozás sikertelen volt a szerveren.');
-        }
-      } catch (error) {
-        console.error('Polling error:', error);
-      }
-    }, 3000);
   };
 
   const handleStopScanning = async () => {
@@ -153,7 +112,7 @@ export default function App() {
         if (latestScanDir) {
           Alert.alert(
             'Kész!', 
-            `A szkennelés sikeresen mentve lett a telefonodra!\n\nEzt a mappát (benne a lidar_mesh.obj-vel) átmásolhatod a PC-dre a RealityCapture-hoz:\n\n${decodeURI(latestScanDir)}`
+            `A szkennelés sikeresen mentve lett a telefonodra!\n\nEzt a mappát (benne a sparse_pc.ply-vel) átmásolhatod a PC-dre a 2DGS tanításhoz:\n\n${decodeURI(latestScanDir)}`
           );
         }
       } catch (error) {
@@ -213,15 +172,12 @@ export default function App() {
             <Text style={styles.buttonText}>Új szoba szkennelése</Text>
           </TouchableOpacity>
 
-          {completedJobId && (
-            <View style={styles.successContainer}>
-              <Text style={styles.successTitle}>Sikeresen feldolgozva!</Text>
-              <Text style={styles.instructionText}>
-                Másold be ezt a linket a PC-d böngészőjébe a WASD bejáráshoz:
-              </Text>
-              <Text style={styles.linkText}>{API_URL}/view/{completedJobId}</Text>
-            </View>
-          )}
+          <TouchableOpacity
+            style={[styles.startButton, { backgroundColor: '#34d399' }]}
+            onPress={exportScanAsZip}
+          >
+            <Text style={[styles.buttonText, { color: '#000' }]}>Szkennelés exportálása (ZIP)</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.clearButton}
@@ -345,26 +301,5 @@ const styles = StyleSheet.create({
     marginBottom: 5,
     lineHeight: 22,
     textAlign: 'center',
-  },
-  successContainer: {
-    backgroundColor: '#2c2c2e',
-    padding: 20,
-    borderRadius: 15,
-    width: '90%',
-    marginTop: 10,
-    marginBottom: 10,
-    alignItems: 'center',
-  },
-  successTitle: {
-    color: '#34d399',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  linkText: {
-    color: '#60a5fa',
-    fontSize: 16,
-    marginTop: 10,
-    fontWeight: 'bold',
   }
 });

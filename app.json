@@ -38,7 +38,8 @@
       }
     },
     "plugins": [
-      "react-native-zip-archive"
+      "react-native-zip-archive",
+      "expo-sharing"
     ]
   }
 }

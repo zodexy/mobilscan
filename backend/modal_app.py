@@ -22,7 +22,8 @@ image = (
     )
     .pip_install("ninja", "numpy<2")
     .pip_install("nerfstudio")
-    .pip_install("fastapi", "uvicorn", "python-multipart", "pydantic")
+    .pip_install("git+https://github.com/B1ueber2y/nerfstudio-2dgs.git")
+    .pip_install("fastapi", "uvicorn", "python-multipart", "pydantic", "opencv-python-headless")
 )
 
 # 2. Volume for Storage
@@ -126,12 +127,13 @@ def convert_arkit_to_nerfstudio(data_dir: str):
     
     for frame in frames:
         matrix = frame["transform_matrix"]
-        # Convert ARKit pose to Nerfstudio convention
+        # Convert ARKit pose (Right-handed, Y-up) to Nerfstudio/OpenCV convention (Right-handed, Y-down, Z-in)
+        # We do this by negating the Y (column 1) and Z (column 2) basis vectors.
         c2w = [
-            [matrix[0][0], -matrix[1][0], -matrix[2][0], matrix[3][0]],
-            [matrix[0][1], -matrix[1][1], -matrix[2][1], matrix[3][1]],
-            [matrix[0][2], -matrix[1][2], -matrix[2][2], matrix[3][2]],
-            [matrix[0][3], -matrix[1][3], -matrix[2][3], matrix[3][3]]
+            [matrix[0][0], -matrix[0][1], -matrix[0][2], matrix[0][3]],
+            [matrix[1][0], -matrix[1][1], -matrix[1][2], matrix[1][3]],
+            [matrix[2][0], -matrix[2][1], -matrix[2][2], matrix[2][3]],
+            [matrix[3][0], -matrix[3][1], -matrix[3][2], matrix[3][3]]
         ]
         
         out_frame = {
@@ -146,11 +148,7 @@ def convert_arkit_to_nerfstudio(data_dir: str):
         
     output_json_path = os.path.join(data_dir, "transforms.json")
     
-    # GENERATE LIDAR POINT CLOUD FOR INITIALIZATION
-    print("Generating LiDAR point cloud for Splatfacto initialization...")
-    generate_point_cloud(data_dir, out_data)
-    
-    # Tell Nerfstudio to use the generated point cloud
+    # Tell Nerfstudio to use the pre-generated point cloud from iOS app
     out_data["ply_file_path"] = "sparse_pc.ply"
     
     with open(output_json_path, 'w') as f:
@@ -158,81 +156,12 @@ def convert_arkit_to_nerfstudio(data_dir: str):
         
     return data_dir
 
-def generate_point_cloud(data_dir: str, transforms_data: dict):
-    points = []
-    # Only sample a subset of pixels to keep the point cloud sparse and fast
-    subsample = 4
-    
-    for frame in transforms_data["frames"]:
-        depth_path = os.path.join(data_dir, frame["file_path"].replace("images", "depth").replace(".jpg", ".bin"))
-        if not os.path.exists(depth_path):
-            continue
-            
-        c2w = frame["transform_matrix"]
-        fl_x, fl_y = frame["fl_x"], frame["fl_y"]
-        cx, cy = frame["cx"], frame["cy"]
-        w, h = transforms_data["w"], transforms_data["h"]
-        
-        # ARKit depth maps are 256x192 (Landscape)
-        depth_w, depth_h = 256, 192
-        scale_x = depth_w / w
-        scale_y = depth_h / h
-        
-        try:
-            with open(depth_path, 'rb') as f:
-                depth_data = f.read()
-        except Exception:
-            continue
-            
-        # Float32 pixels
-        # 256x192 = 49152 floats = 196608 bytes. If bytesPerRow is padded, we must be careful.
-        # ARKit depth maps are usually exact.
-        floats = struct.unpack(f"<{len(depth_data)//4}f", depth_data)
-        
-        for v in range(0, depth_h, subsample):
-            for u in range(0, depth_w, subsample):
-                idx = v * depth_w + u
-                if idx >= len(floats):
-                    continue
-                z = floats[idx]
-                if z <= 0.1 or z > 5.0:  # Ignore very close or very far points
-                    continue
-                    
-                # Unproject
-                # We use the scaled intrinsics for the depth map
-                x = (u - (cx * scale_x)) * z / (fl_x * scale_x)
-                y = (v - (cy * scale_y)) * z / (fl_y * scale_y)
-                
-                # Camera coordinates (OpenCV: X right, Y down, Z forward)
-                # Apply c2w
-                px = c2w[0][0]*x + c2w[0][1]*y + c2w[0][2]*z + c2w[0][3]
-                py = c2w[1][0]*x + c2w[1][1]*y + c2w[1][2]*z + c2w[1][3]
-                pz = c2w[2][0]*x + c2w[2][1]*y + c2w[2][2]*z + c2w[2][3]
-                
-                points.append((px, py, pz))
-                
-    # Write PLY file
-    ply_path = os.path.join(data_dir, "sparse_pc.ply")
-    with open(ply_path, 'w') as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points)}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("end_header\n")
-        for p in points:
-            # White points
-            f.write(f"{p[0]:.6f} {p[1]:.6f} {p[2]:.6f} 255 255 255\n")
 
 # 3. Serverless GPU Function for Processing
 @app.function(
     image=image, 
     volumes={VOLUME_DIR: volume}, 
-    gpu="A10G", # A10G is powerful enough and cheaper than A100.
+    gpu="A100", # Az A100-as kártya brutális sebességet biztosít a 2 perces feldolgozáshoz.
     timeout=1800 # 30 mins max
 )
 def run_gaussian_splatting(job_id: str, zip_path: str):
@@ -273,16 +202,17 @@ def run_gaussian_splatting(job_id: str, zip_path: str):
         update_status(job_id, "training")
         print(f"[{job_id}] Training Gaussian Splats...")
         train_cmd = [
-            "ns-train", "splatfacto", 
+            "ns-train", "2dgs", 
             "--vis", "tensorboard",
             "--pipeline.datamanager.max-thread-workers", "4",
             "--pipeline.model.camera-optimizer.mode", "SO3xR3", # BEKAPCSOLVA: kijavítja a gyors mozgás miatti ARKit pontatlanságot
-            "--pipeline.model.sh-degree", "3", # Maximum minőség a gyönyörű fényes felületekért
+            "--pipeline.model.sh-degree", "1", # 1-es szint a leggyorsabb előnézethez
             "--timestamp", job_id,
-            "--max-num-iterations", "4000", # Középút: 4000 lépés elég a szép minőséghez, de még mindig nagyon olcsó
+            "--max-num-iterations", "2000", # Szupergyors 2 perces előnézethez
             "nerfstudio-data", 
             "--data", actual_data_dir,
-            "--downscale-factor", "2" 
+            "--downscale-factor", "2", # Kisebb felbontás a hihetetlenül gyors tanulásért
+            "--load-3D-points", "True" # LiDAR pontfelhő használata
         ]
         
         subprocess.run(train_cmd, check=True)

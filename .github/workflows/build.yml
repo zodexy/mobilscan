@@ -1,0 +1,47 @@
+name: Build Unsigned IPA for Sideloadly
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prebuild Expo (Generate iOS folder)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          pod install
+
+      - name: Build Unsigned App
+        run: |
+          cd ios
+          xcodebuild -workspace Mobilscan.xcworkspace -scheme Mobilscan -configuration Release -sdk iphoneos CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO SYMROOT=$(PWD)/build build
+
+      - name: Package into IPA
+        run: |
+          mkdir -p Payload
+          mv ios/build/Release-iphoneos/Mobilscan.app Payload/
+          zip -r Mobilscan.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mobilscan-Unsigned-IPA
+          path: Mobilscan.ipa
