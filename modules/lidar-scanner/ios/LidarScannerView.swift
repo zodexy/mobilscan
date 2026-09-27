@@ -16,7 +16,7 @@ struct VoxelKey: Hashable {
 
 class ColorGrid {
     let gridSize: Float = 0.02 // 2cm voxels for color retention
-    var grid: [VoxelKey: SIMD3<UInt8>] = [:]
+    var grid: [VoxelKey: SIMD3<Float>] = [:]
     
     func key(for position: SIMD3<Float>) -> VoxelKey {
         return VoxelKey(
@@ -24,6 +24,34 @@ class ColorGrid {
             y: Int(round(position.y / gridSize)),
             z: Int(round(position.z / gridSize))
         )
+    }
+    
+    func paint(at position: SIMD3<Float>, r: UInt8, g: UInt8, b: UInt8) -> SIMD3<UInt8> {
+        let key = self.key(for: position)
+        if let existing = grid[key] {
+            // Move 30% towards new color for a smooth spray-paint effect
+            let newR = existing.x * 0.7 + Float(r) * 0.3
+            let newG = existing.y * 0.7 + Float(g) * 0.3
+            let newB = existing.z * 0.7 + Float(b) * 0.3
+            let newColor = SIMD3<Float>(newR, newG, newB)
+            grid[key] = newColor
+            return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
+        } else {
+            // First time seeing this voxel: start 50% between gray and the true color
+            let newR = 150.0 * 0.5 + Float(r) * 0.5
+            let newG = 150.0 * 0.5 + Float(g) * 0.5
+            let newB = 150.0 * 0.5 + Float(b) * 0.5
+            let newColor = SIMD3<Float>(newR, newG, newB)
+            grid[key] = newColor
+            return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
+        }
+    }
+    
+    func getColor(at position: SIMD3<Float>) -> SIMD3<UInt8>? {
+        if let c = grid[key(for: position)] {
+            return SIMD3<UInt8>(UInt8(c.x), UInt8(c.y), UInt8(c.z))
+        }
+        return nil
     }
 }
 extension SCNGeometry {
@@ -47,10 +75,10 @@ extension SCNGeometry {
             let bytes = [UInt8](data)
             
             for i in 0..<vertices.count {
-                var r: UInt8 = 0
-                var g: UInt8 = 0
-                var b: UInt8 = 0
-                var a: UInt8 = 0 // Fully transparent by default
+                var r: UInt8 = 150
+                var g: UInt8 = 150
+                var b: UInt8 = 150
+                var a: UInt8 = 200 // Semi-transparent gray for unpainted (hides sharp camera!)
                 
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
@@ -72,21 +100,20 @@ extension SCNGeometry {
                     if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
                         let offset = (py * rgbWidth + px) * 4
                         if offset + 2 < bytes.count {
-                            r = bytes[offset]
-                            g = bytes[offset + 1]
-                            b = bytes[offset + 2]
-                            a = 255
-                            coloredFromCamera = true
-                            
                             if let grid = colorGrid {
-                                grid.grid[grid.key(for: worldPos)] = SIMD3<UInt8>(r, g, b)
+                                let newColor = grid.paint(at: worldPos, r: bytes[offset], g: bytes[offset + 1], b: bytes[offset + 2])
+                                r = newColor.x
+                                g = newColor.y
+                                b = newColor.z
+                                a = 255
+                                coloredFromCamera = true
                             }
                         }
                     }
                 }
                 
                 if !coloredFromCamera, let grid = colorGrid {
-                    if let savedColor = grid.grid[grid.key(for: worldPos)] {
+                    if let savedColor = grid.getColor(at: worldPos) {
                         r = savedColor.x
                         g = savedColor.y
                         b = savedColor.z
