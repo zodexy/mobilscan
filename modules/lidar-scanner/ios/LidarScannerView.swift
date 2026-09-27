@@ -7,8 +7,27 @@ import SceneKit
 import CoreImage
 import UIKit
 import Metal
+
+struct VoxelKey: Hashable {
+    let x: Int
+    let y: Int
+    let z: Int
+}
+
+class ColorGrid {
+    let gridSize: Float = 0.02 // 2cm voxels for color retention
+    var grid: [VoxelKey: SIMD3<UInt8>] = [:]
+    
+    func key(for position: SIMD3<Float>) -> VoxelKey {
+        return VoxelKey(
+            x: Int(round(position.x / gridSize)),
+            y: Int(round(position.y / gridSize)),
+            z: Int(round(position.z / gridSize))
+        )
+    }
+}
 extension SCNGeometry {
-    convenience init?(from meshGeometry: ARMeshGeometry, nodeTransform: simd_float4x4? = nil, camera: ARCamera? = nil, rgbData: Data? = nil, rgbWidth: Int = 0, rgbHeight: Int = 0) {
+    convenience init?(from meshGeometry: ARMeshGeometry, nodeTransform: simd_float4x4? = nil, camera: ARCamera? = nil, rgbData: Data? = nil, rgbWidth: Int = 0, rgbHeight: Int = 0, colorGrid: ColorGrid? = nil) {
         let vertices = meshGeometry.vertices
         let normals = meshGeometry.normals
         let faces = meshGeometry.faces
@@ -35,6 +54,9 @@ extension SCNGeometry {
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
                 let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
+                let worldPos = SIMD3<Float>(worldVertex.x, worldVertex.y, worldVertex.z)
+                
+                var coloredFromCamera = false
                 
                 let clip = viewProj * worldVertex
                 if clip.w > 0 {
@@ -49,10 +71,24 @@ extension SCNGeometry {
                     if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
                         let offset = (py * rgbWidth + px) * 4
                         if offset + 2 < bytes.count {
-                            b = bytes[offset]
+                            // CGContext creates perfect RGBA bytes
+                            r = bytes[offset]
                             g = bytes[offset + 1]
-                            r = bytes[offset + 2]
+                            b = bytes[offset + 2]
+                            coloredFromCamera = true
+                            
+                            if let grid = colorGrid {
+                                grid.grid[grid.key(for: worldPos)] = SIMD3<UInt8>(r, g, b)
+                            }
                         }
+                    }
+                }
+                
+                if !coloredFromCamera, let grid = colorGrid {
+                    if let savedColor = grid.grid[grid.key(for: worldPos)] {
+                        r = savedColor.x
+                        g = savedColor.y
+                        b = savedColor.z
                     }
                 }
                 
@@ -90,6 +126,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     var latestRGBWidth: Int = 0
     var latestRGBHeight: Int = 0
     var latestCamera: ARCamera?
+    let colorGrid = ColorGrid()
     
     let onFrameCaptured = EventDispatcher()
     let onError = EventDispatcher()
@@ -134,6 +171,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
         lastCaptureTime = 0
+        colorGrid.grid.removeAll()
         
         // Késleltetve (hogy az ARKit már bekapcsolja a kamerát) átállítjuk a záridőt "Sport" módra!
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -354,12 +392,20 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         // Setup live colorization data (low-res)
         let scale = 120.0 / CGFloat(max(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer)))
         let scaledCI = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        if let smallCgImg = self.ciContext.createCGImage(scaledCI, from: scaledCI.extent) {
-            self.latestRGBWidth = smallCgImg.width
-            self.latestRGBHeight = smallCgImg.height
-            self.latestCamera = frame.camera
-            if let dataProvider = smallCgImg.dataProvider, let data = dataProvider.data {
-                self.latestRGBData = Data(referencing: data)
+        
+        let width = Int(scaledCI.extent.width)
+        let height = Int(scaledCI.extent.height)
+        
+        if width > 0 && height > 0 {
+            var rawData = [UInt8](repeating: 0, count: width * height * 4)
+            if let cgContext = CGContext(data: &rawData, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                if let smallCgImg = self.ciContext.createCGImage(scaledCI, from: scaledCI.extent) {
+                    cgContext.draw(smallCgImg, in: CGRect(x: 0, y: 0, width: width, height: height))
+                    self.latestRGBWidth = width
+                    self.latestRGBHeight = height
+                    self.latestCamera = frame.camera
+                    self.latestRGBData = Data(rawData)
+                }
             }
         }
         
@@ -378,7 +424,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return nil }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight) else { return nil }
+        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return nil }
         
         let material = SCNMaterial()
         material.isDoubleSided = false
@@ -391,7 +437,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight) else { return }
+        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return }
         
         let material = SCNMaterial()
         material.isDoubleSided = false
