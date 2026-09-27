@@ -22,43 +22,39 @@ extension SCNGeometry {
             let projMat = cam.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: rgbWidth, height: rgbHeight), zNear: 0.001, zFar: 1000)
             let viewProj = projMat * viewMat
             
-            data.withUnsafeBytes { ptr in
-                let bytes = ptr.bindMemory(to: UInt8.self).baseAddress
-                for i in 0..<vertices.count {
-                    var r: UInt8 = 180
-                    var g: UInt8 = 180
-                    var b: UInt8 = 180
+            let bytes = [UInt8](data)
+            
+            for i in 0..<vertices.count {
+                var r: UInt8 = 180
+                var g: UInt8 = 180
+                var b: UInt8 = 180
+                
+                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
+                let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
+                
+                var clip = viewProj * worldVertex
+                if clip.w > 0 {
+                    let ndc = clip.xy / clip.w
+                    let u = (ndc.x * 0.5) + 0.5
+                    let v = 1.0 - ((ndc.y * 0.5) + 0.5)
                     
-                    if let bytes = bytes {
-                        let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
-                        let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                        let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
-                        
-                        var clip = viewProj * worldVertex
-                        if clip.w > 0 {
-                            let ndc = clip.xy / clip.w
-                            let u = (ndc.x * 0.5) + 0.5
-                            let v = 1.0 - ((ndc.y * 0.5) + 0.5)
-                            
-                            let px = Int(u * Float(rgbWidth))
-                            let py = Int(v * Float(rgbHeight))
-                            
-                            if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
-                                // Add bounds check in case CGImage has padding (bytesPerRow > width * 4)
-                                // Ideally we'd use bytesPerRow, but this is a safe fallback for the "painting" effect.
-                                let offset = (py * rgbWidth + px) * 4
-                                if offset + 2 < data.count {
-                                    b = bytes[offset]
-                                    g = bytes[offset + 1]
-                                    r = bytes[offset + 2]
-                                }
-                            }
+                    let px = Int(u * Float(rgbWidth))
+                    let py = Int(v * Float(rgbHeight))
+                    
+                    if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
+                        let offset = (py * rgbWidth + px) * 4
+                        if offset + 2 < bytes.count {
+                            b = bytes[offset]
+                            g = bytes[offset + 1]
+                            r = bytes[offset + 2]
                         }
                     }
-                    colorData.append(r)
-                    colorData.append(g)
-                    colorData.append(b)
                 }
+                
+                colorData.append(r)
+                colorData.append(g)
+                colorData.append(b)
             }
             let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: false, componentsPerVector: 3, bytesPerComponent: 1, dataOffset: 0, dataStride: 3)
             sources.append(colorSource)
@@ -228,11 +224,8 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         """
         
         if let headerData = header.data(using: .utf8) {
-            headerData.withUnsafeBytes { ptr in
-                if let baseAddress = ptr.bindMemory(to: UInt8.self).baseAddress {
-                    outputStream.write(baseAddress, maxLength: headerData.count)
-                }
-            }
+            let bytes = [UInt8](headerData)
+            outputStream.write(bytes, maxLength: bytes.count)
         }
         
         for anchor in anchors {
@@ -256,11 +249,8 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 
                 let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
                 if let lineData = line.data(using: .utf8) {
-                    lineData.withUnsafeBytes { ptr in
-                        if let baseAddress = ptr.bindMemory(to: UInt8.self).baseAddress {
-                            outputStream.write(baseAddress, maxLength: lineData.count)
-                        }
-                    }
+                    let bytes = [UInt8](lineData)
+                    outputStream.write(bytes, maxLength: bytes.count)
                 }
             }
         }
