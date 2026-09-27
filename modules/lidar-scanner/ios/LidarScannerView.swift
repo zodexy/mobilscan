@@ -1,3 +1,5 @@
+import Foundation
+import AVFoundation
 import ExpoModulesCore
 import ARKit
 import SceneKit
