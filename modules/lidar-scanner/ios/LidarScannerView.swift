@@ -114,6 +114,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
     
     func startScanning() {
+        if isScanning { return }
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
             print("LiDAR is not supported on this device.")
             onError([
@@ -149,17 +150,18 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                         let duration = CMTimeMake(value: 1, timescale: 120)
                         let iso = min(device.activeFormat.maxISO, 800) // Magasabb ISO, hogy ne legyen túl sötét
                         device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
-                        print("Kamera záridő sikeresen beállítva: 1/120s a(z) \\(device.localizedName) eszközön")
+                        print("Kamera záridő sikeresen beállítva: 1/120s a(z) \(device.localizedName) eszközön")
                     }
                     device.unlockForConfiguration()
                 } catch {
-                    print("Nem sikerült zárolni a kamerát: \\(error)")
+                    print("Nem sikerült zárolni a kamerát: \(error)")
                 }
             }
         }
     }
     
     func stopScanning() {
+        if !isScanning { return }
         isScanning = false
         let currentAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         arView.session.pause()
