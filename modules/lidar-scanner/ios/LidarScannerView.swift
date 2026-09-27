@@ -62,12 +62,14 @@ extension SCNGeometry {
         
         let vertexSource = SCNGeometrySource(buffer: vertices.buffer, vertexFormat: vertices.format, semantic: .vertex, vertexCount: vertices.count, dataOffset: vertices.offset, dataStride: vertices.stride)
         let normalSource = SCNGeometrySource(buffer: normals.buffer, vertexFormat: normals.format, semantic: .normal, vertexCount: normals.count, dataOffset: normals.offset, dataStride: normals.stride)
-        let geometryElement = SCNGeometryElement(buffer: faces.buffer, primitiveType: .triangles, primitiveCount: faces.count, bytesPerIndex: faces.bytesPerIndex)
+        
+        let indices = [Int32](0..<Int32(vertices.count))
+        let geometryElement = SCNGeometryElement(indices: indices, primitiveType: .point)
         
         var sources = [vertexSource, normalSource]
         
         if let transform = nodeTransform, let cam = camera, let data = rgbData, rgbWidth > 0, rgbHeight > 0 {
-            var colorData = Data(capacity: vertices.count * 4)
+            var colorData = Data(capacity: vertices.count * 16)
             let viewMat = cam.viewMatrix(for: .landscapeRight)
             let projMat = cam.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: rgbWidth, height: rgbHeight), zNear: 0.001, zFar: 1000)
             let viewProj = projMat * viewMat
@@ -75,10 +77,10 @@ extension SCNGeometry {
             let bytes = [UInt8](data)
             
             for i in 0..<vertices.count {
-                var r: UInt8 = 150
-                var g: UInt8 = 150
-                var b: UInt8 = 150
-                var a: UInt8 = 200 // Semi-transparent gray for unpainted (hides sharp camera!)
+                var r: Float = 150.0 / 255.0
+                var g: Float = 150.0 / 255.0
+                var b: Float = 150.0 / 255.0
+                var a: Float = 200.0 / 255.0 // Semi-transparent gray for unpainted (hides sharp camera!)
                 
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
@@ -102,10 +104,10 @@ extension SCNGeometry {
                         if offset + 2 < bytes.count {
                             if let grid = colorGrid {
                                 let newColor = grid.paint(at: worldPos, r: bytes[offset], g: bytes[offset + 1], b: bytes[offset + 2])
-                                r = newColor.x
-                                g = newColor.y
-                                b = newColor.z
-                                a = 255
+                                r = Float(newColor.x) / 255.0
+                                g = Float(newColor.y) / 255.0
+                                b = Float(newColor.z) / 255.0
+                                a = 1.0
                                 coloredFromCamera = true
                             }
                         }
@@ -114,19 +116,19 @@ extension SCNGeometry {
                 
                 if !coloredFromCamera, let grid = colorGrid {
                     if let savedColor = grid.getColor(at: worldPos) {
-                        r = savedColor.x
-                        g = savedColor.y
-                        b = savedColor.z
-                        a = 255
+                        r = Float(savedColor.x) / 255.0
+                        g = Float(savedColor.y) / 255.0
+                        b = Float(savedColor.z) / 255.0
+                        a = 1.0
                     }
                 }
                 
-                colorData.append(r)
-                colorData.append(g)
-                colorData.append(b)
-                colorData.append(a)
+                var colorVec = SIMD4<Float>(r, g, b, a)
+                withUnsafeBytes(of: &colorVec) { ptr in
+                    colorData.append(contentsOf: ptr)
+                }
             }
-            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: false, componentsPerVector: 4, bytesPerComponent: 1, dataOffset: 0, dataStride: 4)
+            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: 4, dataOffset: 0, dataStride: 16)
             sources.append(colorSource)
         }
         
@@ -460,6 +462,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         material.isDoubleSided = true
         material.lightingModel = .constant // No shading, pure color like 3DGS!
         material.transparencyMode = .dualLayer
+        material.shaderModifiers = [
+            .geometry: "_geometry.pointSize = 10.0;" // 10 pixel splats! Matches 3DGS style.
+        ]
         
         geometry.firstMaterial = material
         return SCNNode(geometry: geometry)
@@ -473,6 +478,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         material.isDoubleSided = true
         material.lightingModel = .constant // No shading, pure color like 3DGS!
         material.transparencyMode = .dualLayer
+        material.shaderModifiers = [
+            .geometry: "_geometry.pointSize = 10.0;" // 10 pixel splats! Matches 3DGS style.
+        ]
         
         geometry.firstMaterial = material
         node.geometry = geometry
