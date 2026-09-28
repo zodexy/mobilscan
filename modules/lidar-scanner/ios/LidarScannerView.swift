@@ -214,7 +214,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         // Késleltetve (hogy az ARKit már bekapcsolja a kamerát) átállítjuk a záridőt "Sport" módra!
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             let discoverySession = AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTripleCamera, .builtInDualCamera, .builtInLiDARDepthCamera],
+                deviceTypes: [.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTripleCamera, .builtInDualCamera],
                 mediaType: .video,
                 position: .back
             )
