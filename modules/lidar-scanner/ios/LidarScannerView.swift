@@ -437,49 +437,87 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         let rgbBytes = [UInt8](rgbData)
         
         var newPoints = false
+        var usedDepth = false
         
         // --- 1. LIDAR DEPTH (If available) ---
-        var usedDepth = false
         if #available(iOS 14.0, *) {
             if let sceneDepth = frame.sceneDepth, let confMap = sceneDepth.confidenceMap {
                 usedDepth = true
                 let depthMap = sceneDepth.depthMap
-            let depthW = CVPixelBufferGetWidth(depthMap)
-            let depthH = CVPixelBufferGetHeight(depthMap)
-            
-            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-            CVPixelBufferLockBaseAddress(confMap, .readOnly)
-            
-            if let depthPtr = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self),
-               let confPtr = CVPixelBufferGetBaseAddress(confMap)?.assumingMemoryBound(to: UInt8.self) {
+                let depthW = CVPixelBufferGetWidth(depthMap)
+                let depthH = CVPixelBufferGetHeight(depthMap)
                 
-                let scaleX = Float(imageResolution.width) / Float(depthW)
-                let scaleY = Float(imageResolution.height) / Float(depthH)
+                CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+                CVPixelBufferLockBaseAddress(confMap, .readOnly)
                 
-                let fx = intrinsics[0][0]
-                let fy = intrinsics[1][1]
-                let cx = intrinsics[2][0]
-                let cy = intrinsics[2][1]
+                if let depthPtr = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self),
+                   let confPtr = CVPixelBufferGetBaseAddress(confMap)?.assumingMemoryBound(to: UInt8.self) {
+                    
+                    let scaleX = Float(imageResolution.width) / Float(depthW)
+                    let scaleY = Float(imageResolution.height) / Float(depthH)
+                    
+                    let fx = intrinsics[0][0]
+                    let fy = intrinsics[1][1]
+                    let cx = intrinsics[2][0]
+                    let cy = intrinsics[2][1]
+                    
+                    for y in stride(from: 0, to: depthH, by: 4) {
+                        for x in stride(from: 0, to: depthW, by: 4) {
+                            let index = y * depthW + x
+                            if confPtr[index] < 2 { continue }
+                            let z = depthPtr[index]
+                            if z < 0.1 || z > 5.0 { continue }
+                            
+                            let rgbX = Float(x) * scaleX
+                            let rgbY = Float(y) * scaleY
+                            
+                            let x_c = (rgbX - cx) * z / fx
+                            let y_c = (rgbY - cy) * z / fy
+                            
+                            let pointCamera = SIMD4<Float>(x_c, y_c, -z, 1.0)
+                            let pointWorld = transform * pointCamera
+                            let pos = SIMD3<Float>(pointWorld.x, pointWorld.y, pointWorld.z)
+                            
+                            let u = rgbX / Float(imageResolution.width)
+                            let v = rgbY / Float(imageResolution.height)
+                            let px = Int(u * Float(latestRGBWidth))
+                            let py = Int(v * Float(latestRGBHeight))
+                            
+                            if px >= 0 && px < latestRGBWidth && py >= 0 && py < latestRGBHeight {
+                                let offset = (py * latestRGBWidth + px) * 4
+                                if offset + 2 < rgbBytes.count {
+                                    if colorGrid.addPoint(pos: pos, r: rgbBytes[offset], g: rgbBytes[offset + 1], b: rgbBytes[offset + 2]) {
+                                        newPoints = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
+                CVPixelBufferUnlockBaseAddress(confMap, .readOnly)
+            }
+        }
+        
+        // --- 2. RAW FEATURE POINTS (Fallback for Non-LiDAR devices) ---
+        if !usedDepth {
+            if let featurePoints = frame.rawFeaturePoints {
+                let viewMatrix = frame.camera.viewMatrix(for: .landscapeRight)
+                let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
+                let viewProj = projMatrix * viewMatrix
                 
-                for y in stride(from: 0, to: depthH, by: 4) {
-                    for x in stride(from: 0, to: depthW, by: 4) {
-                        let index = y * depthW + x
-                        if confPtr[index] < 2 { continue }
-                        let z = depthPtr[index]
-                        if z < 0.1 || z > 5.0 { continue }
+                for i in 0..<featurePoints.count {
+                    let point = featurePoints.points[i]
+                    let pos = SIMD3<Float>(point.x, point.y, point.z)
+                    
+                    let worldVertex = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
+                    let clip = viewProj * worldVertex
+                    if clip.w > 0 {
+                        let ndcX = clip.x / clip.w
+                        let ndcY = clip.y / clip.w
+                        let u = (ndcX * 0.5) + 0.5
+                        let v = 1.0 - ((ndcY * 0.5) + 0.5)
                         
-                        let rgbX = Float(x) * scaleX
-                        let rgbY = Float(y) * scaleY
-                        
-                        let x_c = (rgbX - cx) * z / fx
-                        let y_c = (rgbY - cy) * z / fy
-                        
-                        let pointCamera = SIMD4<Float>(x_c, y_c, -z, 1.0)
-                        let pointWorld = transform * pointCamera
-                        let pos = SIMD3<Float>(pointWorld.x, pointWorld.y, pointWorld.z)
-                        
-                        let u = rgbX / Float(imageResolution.width)
-                        let v = rgbY / Float(imageResolution.height)
                         let px = Int(u * Float(latestRGBWidth))
                         let py = Int(v * Float(latestRGBHeight))
                         
@@ -490,85 +528,6 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                                     newPoints = true
                                 }
                             }
-                        }
-                    }
-                }
-            }
-            CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
-            CVPixelBufferUnlockBaseAddress(confMap, .readOnly)
-        } 
-        // --- 2. RAW FEATURE POINTS (Fallback for Non-LiDAR devices) ---
-        else if let featurePoints = frame.rawFeaturePoints {
-            // Unproject world points back to camera to get their color
-            let viewMatrix = frame.camera.viewMatrix(for: .landscapeRight)
-            let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
-            let viewProj = projMatrix * viewMatrix
-            
-            for i in 0..<featurePoints.count {
-                let point = featurePoints.points[i]
-                let pos = SIMD3<Float>(point.x, point.y, point.z)
-                
-                let worldVertex = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
-                let clip = viewProj * worldVertex
-                if clip.w > 0 {
-                    let ndcX = clip.x / clip.w
-                    let ndcY = clip.y / clip.w
-                    let u = (ndcX * 0.5) + 0.5
-                    let v = 1.0 - ((ndcY * 0.5) + 0.5)
-                    
-                    let px = Int(u * Float(latestRGBWidth))
-                    let py = Int(v * Float(latestRGBHeight))
-                    
-                    if px >= 0 && px < latestRGBWidth && py >= 0 && py < latestRGBHeight {
-                        let offset = (py * latestRGBWidth + px) * 4
-                        if offset + 2 < rgbBytes.count {
-                            if colorGrid.addPoint(pos: pos, r: rgbBytes[offset], g: rgbBytes[offset + 1], b: rgbBytes[offset + 2]) {
-                                newPoints = true
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // The logic is moved above
-        
-        if newPoints {
-            // Update node occasionally so it doesn't freeze the UI on every frame
-            DispatchQueue.main.async {
-                self.rebuildPointCloudNode()
-            }
-        }
-    }
-    
-    private func extractFallbackPointCloud(from frame: ARFrame, intrinsics: simd_float3x3, imageResolution: CGSize, rgbBytes: [UInt8]) {
-        guard let featurePoints = frame.rawFeaturePoints else { return }
-        
-        var newPoints = false
-        let viewMatrix = frame.camera.viewMatrix(for: .landscapeRight)
-        let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
-        let viewProj = projMatrix * viewMatrix
-        
-        for i in 0..<featurePoints.count {
-            let point = featurePoints.points[i]
-            let pos = SIMD3<Float>(point.x, point.y, point.z)
-            
-            let worldVertex = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
-            let clip = viewProj * worldVertex
-            if clip.w > 0 {
-                let ndcX = clip.x / clip.w
-                let ndcY = clip.y / clip.w
-                let u = (ndcX * 0.5) + 0.5
-                let v = 1.0 - ((ndcY * 0.5) + 0.5)
-                
-                let px = Int(u * Float(latestRGBWidth))
-                let py = Int(v * Float(latestRGBHeight))
-                
-                if px >= 0 && px < latestRGBWidth && py >= 0 && py < latestRGBHeight {
-                    let offset = (py * latestRGBWidth + px) * 4
-                    if offset + 2 < rgbBytes.count {
-                        if colorGrid.addPoint(pos: pos, r: rgbBytes[offset], g: rgbBytes[offset + 1], b: rgbBytes[offset + 2]) {
-                            newPoints = true
                         }
                     }
                 }
