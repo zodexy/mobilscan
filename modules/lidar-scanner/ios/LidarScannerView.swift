@@ -499,9 +499,10 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 CVPixelBufferUnlockBaseAddress(dBuffer, .readOnly)
                 
                 // Extract confidence as CGImage
-                let cBuffer = sceneDepth.confidenceMap
-                let ci = CIImage(cvPixelBuffer: cBuffer)
-                confCgImage = ciContext.createCGImage(ci, from: ci.extent)
+                if let cBuffer = sceneDepth.confidenceMap {
+                    let ci = CIImage(cvPixelBuffer: cBuffer)
+                    confCgImage = ciContext.createCGImage(ci, from: ci.extent)
+                }
             }
         }
         
