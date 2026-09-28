@@ -37,10 +37,10 @@ class ColorGrid {
             grid[key] = newColor
             return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
         } else {
-            // First time seeing this voxel: start 50% between gray and the true color
-            let newR = 150.0 * 0.5 + Float(r) * 0.5
-            let newG = 150.0 * 0.5 + Float(g) * 0.5
-            let newB = 150.0 * 0.5 + Float(b) * 0.5
+            // First time seeing this voxel: use true color immediately for popping effect
+            let newR = Float(r)
+            let newG = Float(g)
+            let newB = Float(b)
             let newColor = SIMD3<Float>(newR, newG, newB)
             grid[key] = newColor
             return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
@@ -77,10 +77,10 @@ extension SCNGeometry {
             let bytes = [UInt8](data)
             
             for i in 0..<vertices.count {
-                var r: Float = 150.0 / 255.0
-                var g: Float = 150.0 / 255.0
-                var b: Float = 150.0 / 255.0
-                var a: Float = 200.0 / 255.0 // Semi-transparent gray for unpainted (hides sharp camera!)
+                var r: Float = 0.0
+                var g: Float = 0.0
+                var b: Float = 0.0
+                var a: Float = 0.0 // Invisible when unpainted so they build up in real-time!
                 
                 let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
                 let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
@@ -139,6 +139,7 @@ extension SCNGeometry {
 class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     let arView = ARSCNView(frame: .zero)
     var isScanning = false
+    var overlayNode: SCNNode?
     
     var lastCaptureTime: TimeInterval = 0
     let captureInterval: TimeInterval = 1.0 / 5.0 // 5 FPS
@@ -233,6 +234,10 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     func stopScanning() {
         if !isScanning { return }
         isScanning = false
+        
+        overlayNode?.removeFromParentNode()
+        overlayNode = nil
+        
         let currentAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         arView.session.pause()
         
@@ -368,11 +373,32 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isScanning else { return }
         
+        if overlayNode == nil, let cameraNode = arView.pointOfView {
+            setupOverlayNode(on: cameraNode)
+        }
+        
         let currentTime = frame.timestamp
         if currentTime - lastCaptureTime >= captureInterval {
             lastCaptureTime = currentTime
             captureData(from: frame)
         }
+    }
+    
+    private func setupOverlayNode(on cameraNode: SCNNode) {
+        let plane = SCNPlane(width: 50, height: 50)
+        let material = SCNMaterial()
+        material.diffuse.contents = UIColor(white: 0.15, alpha: 0.85) // Dark grey overlay to dim the real world
+        material.lightingModel = .constant
+        material.readsFromDepthBuffer = false
+        material.writesToDepthBuffer = false
+        plane.firstMaterial = material
+        
+        let node = SCNNode(geometry: plane)
+        node.renderingOrder = -1 // Render before everything else
+        node.position = SCNVector3(0, 0, -1) // 1 meter in front of the camera
+        
+        cameraNode.addChildNode(node)
+        self.overlayNode = node
     }
     
     func captureData(from frame: ARFrame) {
