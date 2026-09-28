@@ -33,11 +33,12 @@ class ColorGrid {
             return true
         } else {
             // Blend color slightly
-            let existing = grid[key]!
+            var existing = grid[key]!
             let newR = existing.color.x * 0.8 + Float(r) * 0.2
             let newG = existing.color.y * 0.8 + Float(g) * 0.2
             let newB = existing.color.z * 0.8 + Float(b) * 0.2
-            grid[key]?.color = SIMD3<Float>(newR, newG, newB)
+            existing.color = SIMD3<Float>(newR, newG, newB)
+            grid[key] = existing
             return false
         }
     }
@@ -424,12 +425,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         }
         
         // Extract dense point cloud for Live Preview!
-        if #available(iOS 14.0, *) {
-            extractPointCloud(from: frame)
-        }
+        extractPointCloud(from: frame)
     }
     
-    @available(iOS 14.0, *)
     private func extractPointCloud(from frame: ARFrame) {
         let intrinsics = frame.camera.intrinsics
         let transform = frame.camera.transform
@@ -441,8 +439,11 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         var newPoints = false
         
         // --- 1. LIDAR DEPTH (If available) ---
-        if let sceneDepth = frame.sceneDepth, let confMap = sceneDepth.confidenceMap {
-            let depthMap = sceneDepth.depthMap
+        var usedDepth = false
+        if #available(iOS 14.0, *) {
+            if let sceneDepth = frame.sceneDepth, let confMap = sceneDepth.confidenceMap {
+                usedDepth = true
+                let depthMap = sceneDepth.depthMap
             let depthW = CVPixelBufferGetWidth(depthMap)
             let depthH = CVPixelBufferGetHeight(depthMap)
             
@@ -534,6 +535,47 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         if newPoints {
             // Update node occasionally so it doesn't freeze the UI on every frame
+            DispatchQueue.main.async {
+                self.rebuildPointCloudNode()
+            }
+        }
+    }
+    
+    private func extractFallbackPointCloud(from frame: ARFrame, intrinsics: simd_float3x3, imageResolution: CGSize, rgbBytes: [UInt8]) {
+        guard let featurePoints = frame.rawFeaturePoints else { return }
+        
+        var newPoints = false
+        let viewMatrix = frame.camera.viewMatrix(for: .landscapeRight)
+        let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
+        let viewProj = projMatrix * viewMatrix
+        
+        for i in 0..<featurePoints.points.count {
+            let point = featurePoints.points[i]
+            let pos = SIMD3<Float>(point.x, point.y, point.z)
+            
+            let worldVertex = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
+            let clip = viewProj * worldVertex
+            if clip.w > 0 {
+                let ndcX = clip.x / clip.w
+                let ndcY = clip.y / clip.w
+                let u = (ndcX * 0.5) + 0.5
+                let v = 1.0 - ((ndcY * 0.5) + 0.5)
+                
+                let px = Int(u * Float(latestRGBWidth))
+                let py = Int(v * Float(latestRGBHeight))
+                
+                if px >= 0 && px < latestRGBWidth && py >= 0 && py < latestRGBHeight {
+                    let offset = (py * latestRGBWidth + px) * 4
+                    if offset + 2 < rgbBytes.count {
+                        if colorGrid.addPoint(pos: pos, r: rgbBytes[offset], g: rgbBytes[offset + 1], b: rgbBytes[offset + 2]) {
+                            newPoints = true
+                        }
+                    }
+                }
+            }
+        }
+        
+        if newPoints {
             DispatchQueue.main.async {
                 self.rebuildPointCloudNode()
             }
