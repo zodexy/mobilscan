@@ -9,6 +9,12 @@ import UIKit
 import Metal
 import ImageIO
 
+struct VoxelKey: Hashable {
+    let x: Int
+    let y: Int
+    let z: Int
+}
+
 struct VoxelData {
     let pos: SIMD3<Float>
     var color: SIMD3<Float>
@@ -506,8 +512,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
                 let viewProj = projMatrix * viewMatrix
                 
-                for i in 0..<featurePoints.count {
-                    let point = featurePoints.points[i]
+                for point in featurePoints.points {
                     let pos = SIMD3<Float>(point.x, point.y, point.z)
                     
                     let worldVertex = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
