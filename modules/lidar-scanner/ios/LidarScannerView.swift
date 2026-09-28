@@ -357,7 +357,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         let fileManager = FileManager.default
         let documentDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        scanDir = documentDirectory.appendingPathComponent("Scan_\\(dateStr)", isDirectory: true)
+        scanDir = documentDirectory.appendingPathComponent("Scan_\(dateStr)", isDirectory: true)
         
         guard let scanDir = scanDir else { return }
         
@@ -464,7 +464,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         let confName = String(format: "%04d.png", currentIndex)
         
         var frameDict: [String: Any] = [
-            "file_path": "images/\\(imageName)",
+            "file_path": "images/\(imageName)",
             "transform_matrix": transformArray,
             "timestamp": frame.timestamp
         ]
@@ -475,8 +475,8 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         var confCgImage: CGImage? = nil
         
         if let sceneDepth = frame.sceneDepth {
-            frameDict["depth_file_path"] = "depth/\\(depthName)"
-            frameDict["confidence_file_path"] = "confidence/\\(confName)"
+            frameDict["depth_file_path"] = "depth/\(depthName)"
+            frameDict["confidence_file_path"] = "confidence/\(confName)"
             
             // Extract depth as 16-bit array synchronously
             let dBuffer = sceneDepth.depthMap
@@ -545,7 +545,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             // Save depth PNG
             if let mmData = depthDataArray {
-                let data = mmData.withUnsafeBufferPointer { Data(buffer: $0) }
+                let data = mmData.withUnsafeBytes { Data($0) }
                 if let provider = CGDataProvider(data: data as CFData),
                    let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),
                    let dCgImg = CGImage(width: depthW, height: depthH, bitsPerComponent: 16, bitsPerPixel: 16, bytesPerRow: depthW * 2, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
