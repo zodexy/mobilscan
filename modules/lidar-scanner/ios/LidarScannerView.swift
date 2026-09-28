@@ -200,8 +200,10 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         let config = ARWorldTrackingConfiguration()
         config.sceneReconstruction = .mesh
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            config.frameSemantics = .sceneDepth
+        if #available(iOS 14.0, *) {
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+                config.frameSemantics = .sceneDepth
+            }
         }
         
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -474,31 +476,33 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         var depthH = 0
         var confCgImage: CGImage? = nil
         
-        if let sceneDepth = frame.sceneDepth {
-            frameDict["depth_file_path"] = "depth/\(depthName)"
-            frameDict["confidence_file_path"] = "confidence/\(confName)"
-            
-            // Extract depth as 16-bit array synchronously
-            let dBuffer = sceneDepth.depthMap
-            CVPixelBufferLockBaseAddress(dBuffer, .readOnly)
-            depthW = CVPixelBufferGetWidth(dBuffer)
-            depthH = CVPixelBufferGetHeight(dBuffer)
-            if let baseAddress = CVPixelBufferGetBaseAddress(dBuffer) {
-                let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
-                var localArray = [UInt16](repeating: 0, count: depthW * depthH)
-                for i in 0..<(depthW * depthH) {
-                    let meters = floatBuffer[i]
-                    let mm = meters * 1000.0
-                    localArray[i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
+        if #available(iOS 14.0, *) {
+            if let sceneDepth = frame.sceneDepth {
+                frameDict["depth_file_path"] = "depth/\(depthName)"
+                frameDict["confidence_file_path"] = "confidence/\(confName)"
+                
+                // Extract depth as 16-bit array synchronously
+                let dBuffer = sceneDepth.depthMap
+                CVPixelBufferLockBaseAddress(dBuffer, .readOnly)
+                depthW = CVPixelBufferGetWidth(dBuffer)
+                depthH = CVPixelBufferGetHeight(dBuffer)
+                if let baseAddress = CVPixelBufferGetBaseAddress(dBuffer) {
+                    let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
+                    var localArray = [UInt16](repeating: 0, count: depthW * depthH)
+                    for i in 0..<(depthW * depthH) {
+                        let meters = floatBuffer[i]
+                        let mm = meters * 1000.0
+                        localArray[i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
+                    }
+                    depthDataArray = localArray
                 }
-                depthDataArray = localArray
+                CVPixelBufferUnlockBaseAddress(dBuffer, .readOnly)
+                
+                // Extract confidence as CGImage
+                let cBuffer = sceneDepth.confidenceMap
+                let ci = CIImage(cvPixelBuffer: cBuffer)
+                confCgImage = ciContext.createCGImage(ci, from: ci.extent)
             }
-            CVPixelBufferUnlockBaseAddress(dBuffer, .readOnly)
-            
-            // Extract confidence as CGImage
-            let cBuffer = sceneDepth.confidenceMap
-            let ci = CIImage(cvPixelBuffer: cBuffer)
-            confCgImage = ciContext.createCGImage(ci, from: ci.extent)
         }
         
         transformsData.append(frameDict)
