@@ -8,7 +8,6 @@ import CoreImage
 import UIKit
 import Metal
 import ImageIO
-import MobileCoreServices
 
 struct VoxelKey: Hashable {
     let x: Int
@@ -486,12 +485,13 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             depthH = CVPixelBufferGetHeight(dBuffer)
             if let baseAddress = CVPixelBufferGetBaseAddress(dBuffer) {
                 let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
-                depthDataArray = [UInt16](repeating: 0, count: depthW * depthH)
+                var localArray = [UInt16](repeating: 0, count: depthW * depthH)
                 for i in 0..<(depthW * depthH) {
                     let meters = floatBuffer[i]
                     let mm = meters * 1000.0
-                    depthDataArray![i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
+                    localArray[i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
                 }
+                depthDataArray = localArray
             }
             CVPixelBufferUnlockBaseAddress(dBuffer, .readOnly)
             
@@ -545,12 +545,12 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             // Save depth PNG
             if let mmData = depthDataArray {
-                let data = Data(bytes: mmData, count: mmData.count * 2)
+                let data = mmData.withUnsafeBufferPointer { Data(buffer: $0) }
                 if let provider = CGDataProvider(data: data as CFData),
                    let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),
                    let dCgImg = CGImage(width: depthW, height: depthH, bitsPerComponent: 16, bitsPerPixel: 16, bytesPerRow: depthW * 2, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
                     
-                    if let destination = CGImageDestinationCreateWithURL(depthUrl as CFURL, kUTTypePNG, 1, nil) {
+                    if let destination = CGImageDestinationCreateWithURL(depthUrl as CFURL, "public.png" as CFString, 1, nil) {
                         CGImageDestinationAddImage(destination, dCgImg, nil)
                         CGImageDestinationFinalize(destination)
                     }
@@ -559,7 +559,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             // Save confidence PNG
             if let cCgImg = confCgImage {
-                if let destination = CGImageDestinationCreateWithURL(confUrl as CFURL, kUTTypePNG, 1, nil) {
+                if let destination = CGImageDestinationCreateWithURL(confUrl as CFURL, "public.png" as CFString, 1, nil) {
                     CGImageDestinationAddImage(destination, cCgImg, nil)
                     CGImageDestinationFinalize(destination)
                 }
