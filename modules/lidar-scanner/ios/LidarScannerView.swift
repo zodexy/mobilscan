@@ -99,6 +99,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     
     func startScanning() {
         if isScanning { return }
+        
+        setupDirectories()
+        
         // LiDAR is optional now! We will fallback to rawFeaturePoints if no LiDAR.
         let config = ARWorldTrackingConfiguration()
         
