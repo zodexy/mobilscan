@@ -7,6 +7,8 @@ import SceneKit
 import CoreImage
 import UIKit
 import Metal
+import ImageIO
+import UniformTypeIdentifiers
 
 struct VoxelKey: Hashable {
     let x: Int
@@ -141,8 +143,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     var isScanning = false
     var overlayNode: SCNNode?
     
-    var lastCaptureTime: TimeInterval = 0
-    let captureInterval: TimeInterval = 1.0 / 5.0 // 5 FPS
+    var lastSavedCameraTransform: simd_float4x4?
     
     var scanDir: URL?
     var transformsData: [[String: Any]] = []
@@ -203,7 +204,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isScanning = true
-        lastCaptureTime = 0
+        lastSavedCameraTransform = nil
         colorGrid.grid.removeAll()
         
         // Késleltetve (hogy az ARKit már bekapcsolja a kamerát) átállítjuk a záridőt "Sport" módra!
@@ -222,6 +223,9 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                         let iso = min(device.activeFormat.maxISO, 800.0) // Magasabb ISO, hogy ne legyen túl sötét
                         device.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
                         print("Kamera záridő sikeresen beállítva: 1/120s a(z) \(device.localizedName) eszközön")
+                    }
+                    if device.isWhiteBalanceModeSupported(.locked) {
+                        device.setWhiteBalanceModeLocked(with: device.deviceWhiteBalanceGains, completionHandler: nil)
                     }
                     device.unlockForConfiguration()
                 } catch {
@@ -356,10 +360,14 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         guard let scanDir = scanDir else { return }
         
         let imagesDir = scanDir.appendingPathComponent("images", isDirectory: true)
+        let depthDir = scanDir.appendingPathComponent("depth", isDirectory: true)
+        let confDir = scanDir.appendingPathComponent("confidence", isDirectory: true)
         
         do {
             try fileManager.createDirectory(at: scanDir, withIntermediateDirectories: true, attributes: nil)
             try fileManager.createDirectory(at: imagesDir, withIntermediateDirectories: true, attributes: nil)
+            try fileManager.createDirectory(at: depthDir, withIntermediateDirectories: true, attributes: nil)
+            try fileManager.createDirectory(at: confDir, withIntermediateDirectories: true, attributes: nil)
         } catch {
             print("Error creating directories: \\(error)")
         }
@@ -377,9 +385,29 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             setupOverlayNode(on: cameraNode)
         }
         
-        let currentTime = frame.timestamp
-        if currentTime - lastCaptureTime >= captureInterval {
-            lastCaptureTime = currentTime
+        let currentTransform = frame.camera.transform
+        var shouldCapture = false
+        
+        if let last = lastSavedCameraTransform {
+            let dx = currentTransform.columns.3.x - last.columns.3.x
+            let dy = currentTransform.columns.3.y - last.columns.3.y
+            let dz = currentTransform.columns.3.z - last.columns.3.z
+            let distance = sqrt(dx*dx + dy*dy + dz*dz)
+            
+            let f1 = SIMD3<Float>(last.columns.2.x, last.columns.2.y, last.columns.2.z)
+            let f2 = SIMD3<Float>(currentTransform.columns.2.x, currentTransform.columns.2.y, currentTransform.columns.2.z)
+            let dot = simd_dot(simd_normalize(f1), simd_normalize(f2))
+            let angle = acos(min(max(dot, -1.0), 1.0)) * 180.0 / .pi
+            
+            if distance > 0.12 || angle > 12.0 { // 12cm or 12 degrees
+                shouldCapture = true
+            }
+        } else {
+            shouldCapture = true
+        }
+        
+        if shouldCapture {
+            lastSavedCameraTransform = currentTransform
             captureData(from: frame)
         }
     }
@@ -430,16 +458,52 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         ]
         
         let imageName = String(format: "%04d.jpg", currentIndex)
+        let depthName = String(format: "%04d.png", currentIndex)
+        let confName = String(format: "%04d.png", currentIndex)
         
-        let frameDict: [String: Any] = [
+        var frameDict: [String: Any] = [
             "file_path": "images/\\(imageName)",
-            "transform_matrix": transformArray
+            "transform_matrix": transformArray,
+            "timestamp": frame.timestamp
         ]
+        
+        var depthDataArray: [UInt16]? = nil
+        var depthW = 0
+        var depthH = 0
+        var confCgImage: CGImage? = nil
+        
+        if let sceneDepth = frame.sceneDepth {
+            frameDict["depth_file_path"] = "depth/\\(depthName)"
+            frameDict["confidence_file_path"] = "confidence/\\(confName)"
+            
+            // Extract depth as 16-bit array synchronously
+            let dBuffer = sceneDepth.depthMap
+            CVPixelBufferLockBaseAddress(dBuffer, .readOnly)
+            depthW = CVPixelBufferGetWidth(dBuffer)
+            depthH = CVPixelBufferGetHeight(dBuffer)
+            if let baseAddress = CVPixelBufferGetBaseAddress(dBuffer) {
+                let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
+                depthDataArray = [UInt16](repeating: 0, count: depthW * depthH)
+                for i in 0..<(depthW * depthH) {
+                    let meters = floatBuffer[i]
+                    let mm = meters * 1000.0
+                    depthDataArray![i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(dBuffer, .readOnly)
+            
+            // Extract confidence as CGImage
+            let cBuffer = sceneDepth.confidenceMap
+            let ci = CIImage(cvPixelBuffer: cBuffer)
+            confCgImage = ciContext.createCGImage(ci, from: ci.extent)
+        }
         
         transformsData.append(frameDict)
         
         let imagesDir = scanDir.appendingPathComponent("images")
         let imageUrl = imagesDir.appendingPathComponent(imageName)
+        let depthUrl = scanDir.appendingPathComponent("depth").appendingPathComponent(depthName)
+        let confUrl = scanDir.appendingPathComponent("confidence").appendingPathComponent(confName)
         
         // Convert to CIImage immediately on the AR thread
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
@@ -473,6 +537,25 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 let uiImage = UIImage(cgImage: cgImg)
                 if let jpegData = uiImage.jpegData(compressionQuality: 0.9) {
                     try? jpegData.write(to: imageUrl)
+                }
+            }
+            
+            // Save depth PNG
+            if let mmData = depthDataArray {
+                if let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),
+                   let context = CGContext(data: UnsafeMutableRawPointer(mutating: mmData), width: depthW, height: depthH, bitsPerComponent: 16, bytesPerRow: depthW * 2, space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue),
+                   let dCgImg = context.makeImage(),
+                   let destination = CGImageDestinationCreateWithURL(depthUrl as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                    CGImageDestinationAddImage(destination, dCgImg, nil)
+                    CGImageDestinationFinalize(destination)
+                }
+            }
+            
+            // Save confidence PNG
+            if let cCgImg = confCgImage {
+                if let destination = CGImageDestinationCreateWithURL(confUrl as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                    CGImageDestinationAddImage(destination, cCgImg, nil)
+                    CGImageDestinationFinalize(destination)
                 }
             }
         }
