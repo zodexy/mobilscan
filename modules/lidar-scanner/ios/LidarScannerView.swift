@@ -401,7 +401,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             let f1 = SIMD3<Float>(last.columns.2.x, last.columns.2.y, last.columns.2.z)
             let f2 = SIMD3<Float>(currentTransform.columns.2.x, currentTransform.columns.2.y, currentTransform.columns.2.z)
             let dot = simd_dot(simd_normalize(f1), simd_normalize(f2))
-            let angle = acos(min(max(dot, -1.0), 1.0)) * 180.0 / .pi
+            let angle = acos(min(max(dot, -1.0), 1.0)) * Float(180.0) / Float.pi
             
             if distance > 0.12 || angle > 12.0 { // 12cm or 12 degrees
                 shouldCapture = true
@@ -491,8 +491,8 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                     var localArray = [UInt16](repeating: 0, count: depthW * depthH)
                     for i in 0..<(depthW * depthH) {
                         let meters = floatBuffer[i]
-                        let mm = meters * 1000.0
-                        localArray[i] = mm.isNaN ? 0 : UInt16(min(max(mm, 0), 65535))
+                        let mm = meters * Float(1000.0)
+                        localArray[i] = mm.isNaN ? 0 : UInt16(min(max(mm, Float(0.0)), Float(65535.0)))
                     }
                     depthDataArray = localArray
                 }
@@ -519,7 +519,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent)
         
         // Setup live colorization data (low-res)
-        let scale = 120.0 / CGFloat(max(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer)))
+        let scale = CGFloat(120.0) / CGFloat(max(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer)))
         let scaledCI = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         
         let width = Int(scaledCI.extent.width)
