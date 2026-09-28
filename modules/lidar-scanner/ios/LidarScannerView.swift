@@ -9,15 +9,14 @@ import UIKit
 import Metal
 import ImageIO
 
-struct VoxelKey: Hashable {
-    let x: Int
-    let y: Int
-    let z: Int
+struct VoxelData {
+    let pos: SIMD3<Float>
+    var color: SIMD3<Float>
 }
 
 class ColorGrid {
-    let gridSize: Float = 0.02 // 2cm voxels for color retention
-    var grid: [VoxelKey: SIMD3<Float>] = [:]
+    let gridSize: Float = 0.02 // 2cm voxels
+    var grid: [VoxelKey: VoxelData] = [:]
     
     func key(for position: SIMD3<Float>) -> VoxelKey {
         return VoxelKey(
@@ -27,116 +26,20 @@ class ColorGrid {
         )
     }
     
-    func paint(at position: SIMD3<Float>, r: UInt8, g: UInt8, b: UInt8) -> SIMD3<UInt8> {
-        let key = self.key(for: position)
-        if let existing = grid[key] {
-            // Move 30% towards new color for a smooth spray-paint effect
-            let newR = existing.x * 0.7 + Float(r) * 0.3
-            let newG = existing.y * 0.7 + Float(g) * 0.3
-            let newB = existing.z * 0.7 + Float(b) * 0.3
-            let newColor = SIMD3<Float>(newR, newG, newB)
-            grid[key] = newColor
-            return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
+    func addPoint(pos: SIMD3<Float>, r: UInt8, g: UInt8, b: UInt8) -> Bool {
+        let key = self.key(for: pos)
+        if grid[key] == nil {
+            grid[key] = VoxelData(pos: pos, color: SIMD3<Float>(Float(r), Float(g), Float(b)))
+            return true
         } else {
-            // First time seeing this voxel: use true color immediately for popping effect
-            let newR = Float(r)
-            let newG = Float(g)
-            let newB = Float(b)
-            let newColor = SIMD3<Float>(newR, newG, newB)
-            grid[key] = newColor
-            return SIMD3<UInt8>(UInt8(newR), UInt8(newG), UInt8(newB))
+            // Blend color slightly
+            let existing = grid[key]!
+            let newR = existing.color.x * 0.8 + Float(r) * 0.2
+            let newG = existing.color.y * 0.8 + Float(g) * 0.2
+            let newB = existing.color.z * 0.8 + Float(b) * 0.2
+            grid[key]?.color = SIMD3<Float>(newR, newG, newB)
+            return false
         }
-    }
-    
-    func getColor(at position: SIMD3<Float>) -> SIMD3<UInt8>? {
-        if let c = grid[key(for: position)] {
-            return SIMD3<UInt8>(UInt8(c.x), UInt8(c.y), UInt8(c.z))
-        }
-        return nil
-    }
-}
-extension SCNGeometry {
-    convenience init?(from meshGeometry: ARMeshGeometry, nodeTransform: simd_float4x4? = nil, camera: ARCamera? = nil, rgbData: Data? = nil, rgbWidth: Int = 0, rgbHeight: Int = 0, colorGrid: ColorGrid? = nil) {
-        let vertices = meshGeometry.vertices
-        let normals = meshGeometry.normals
-        let faces = meshGeometry.faces
-        
-        let vertexSource = SCNGeometrySource(buffer: vertices.buffer, vertexFormat: vertices.format, semantic: .vertex, vertexCount: vertices.count, dataOffset: vertices.offset, dataStride: vertices.stride)
-        let normalSource = SCNGeometrySource(buffer: normals.buffer, vertexFormat: normals.format, semantic: .normal, vertexCount: normals.count, dataOffset: normals.offset, dataStride: normals.stride)
-        
-        let facesData = Data(bytes: faces.buffer.contents(), count: faces.buffer.length)
-        let geometryElement = SCNGeometryElement(data: facesData,
-                                                 primitiveType: .triangles,
-                                                 primitiveCount: faces.count,
-                                                 bytesPerIndex: faces.bytesPerIndex)
-        
-        var sources = [vertexSource, normalSource]
-        
-        if let transform = nodeTransform, let cam = camera, let data = rgbData, rgbWidth > 0, rgbHeight > 0 {
-            var colorData = Data(capacity: vertices.count * 16)
-            let viewMat = cam.viewMatrix(for: .landscapeRight)
-            let projMat = cam.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: rgbWidth, height: rgbHeight), zNear: 0.001, zFar: 1000)
-            let viewProj = projMat * viewMat
-            
-            let bytes = [UInt8](data)
-            
-            for i in 0..<vertices.count {
-                var r: Float = 0.0
-                var g: Float = 0.0
-                var b: Float = 0.0
-                var a: Float = 0.0 // Invisible when unpainted so they build up in real-time!
-                
-                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
-                let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
-                let worldPos = SIMD3<Float>(worldVertex.x, worldVertex.y, worldVertex.z)
-                
-                var coloredFromCamera = false
-                
-                let clip = viewProj * worldVertex
-                if clip.w > 0 {
-                    let ndcX = clip.x / clip.w
-                    let ndcY = clip.y / clip.w
-                    let u = (ndcX * 0.5) + 0.5
-                    let v = 1.0 - ((ndcY * 0.5) + 0.5)
-                    
-                    let px = Int(u * Float(rgbWidth))
-                    let py = Int(v * Float(rgbHeight))
-                    
-                    if px >= 0 && px < rgbWidth && py >= 0 && py < rgbHeight {
-                        let offset = (py * rgbWidth + px) * 4
-                        if offset + 2 < bytes.count {
-                            if let grid = colorGrid {
-                                let newColor = grid.paint(at: worldPos, r: bytes[offset], g: bytes[offset + 1], b: bytes[offset + 2])
-                                r = Float(newColor.x) / 255.0
-                                g = Float(newColor.y) / 255.0
-                                b = Float(newColor.z) / 255.0
-                                a = 1.0
-                                coloredFromCamera = true
-                            }
-                        }
-                    }
-                }
-                
-                if !coloredFromCamera, let grid = colorGrid {
-                    if let savedColor = grid.getColor(at: worldPos) {
-                        r = Float(savedColor.x) / 255.0
-                        g = Float(savedColor.y) / 255.0
-                        b = Float(savedColor.z) / 255.0
-                        a = 1.0
-                    }
-                }
-                
-                var colorVec = SIMD4<Float>(r, g, b, a)
-                withUnsafeBytes(of: &colorVec) { ptr in
-                    colorData.append(contentsOf: ptr)
-                }
-            }
-            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: vertices.count, usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: 4, dataOffset: 0, dataStride: 16)
-            sources.append(colorSource)
-        }
-        
-        self.init(sources: sources, elements: [geometryElement])
     }
 }
 
@@ -144,6 +47,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     let arView = ARSCNView(frame: .zero)
     var isScanning = false
     var overlayNode: SCNNode?
+    var pointCloudNode: SCNNode?
     
     var lastSavedCameraTransform: simd_float4x4?
     
@@ -222,12 +126,14 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         
         overlayNode?.removeFromParentNode()
         overlayNode = nil
+        pointCloudNode?.removeFromParentNode()
+        pointCloudNode = nil
         
-        let currentAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         arView.session.pause()
         
         let currentScanDir = scanDir
         let currentTransforms = transformsData
+        let savedGrid = Array(colorGrid.grid.values)
         
         savingQueue.async {
             if let scanDir = currentScanDir {
@@ -255,26 +161,21 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                     try? jsonData.write(to: jsonUrl)
                 }
                 
-                // Save Lidar Mesh as PLY for 2DGS/3DGS initialization
-                self.exportMeshAsPLY(anchors: currentAnchors, to: scanDir.appendingPathComponent("sparse_pc.ply"))
+                // Save Lidar Point Cloud as PLY for 2DGS/3DGS initialization
+                self.exportMeshAsPLY(points: savedGrid, to: scanDir.appendingPathComponent("sparse_pc.ply"))
             }
         }
     }
     
-    private func exportMeshAsPLY(anchors: [ARMeshAnchor], to url: URL) {
+    private func exportMeshAsPLY(points: [VoxelData], to url: URL) {
         guard let outputStream = OutputStream(url: url, append: false) else { return }
         outputStream.open()
         defer { outputStream.close() }
         
-        var totalVertices = 0
-        for anchor in anchors {
-            totalVertices += anchor.geometry.vertices.count
-        }
-        
         let header = """
         ply
         format ascii 1.0
-        element vertex \(totalVertices)
+        element vertex \(points.count)
         property float x
         property float y
         property float z
@@ -296,33 +197,14 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             }
         }
         
-        for anchor in anchors {
-            let geometry = anchor.geometry
-            let transform = anchor.transform
-            let vertices = geometry.vertices
-            let normals = geometry.normals
-            
-            for i in 0..<vertices.count {
-                let vertexPointer = vertices.buffer.contents().advanced(by: vertices.offset + (vertices.stride * i))
-                let vertex = vertexPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                
-                // Transform vertex to world space
-                let worldVertex = transform * SIMD4<Float>(vertex.x, vertex.y, vertex.z, 1.0)
-                
-                let normalPointer = normals.buffer.contents().advanced(by: normals.offset + (normals.stride * i))
-                let normal = normalPointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                
-                // Transform normal to world space
-                let normal4 = transform * SIMD4<Float>(normal.x, normal.y, normal.z, 0.0)
-                let worldNormal = simd_normalize(SIMD3<Float>(normal4.x, normal4.y, normal4.z))
-                
-                let line = "\(worldVertex.x) \(worldVertex.y) \(worldVertex.z) \(worldNormal.x) \(worldNormal.y) \(worldNormal.z) 128 128 128\n"
-                if let lineData = line.data(using: .utf8) {
-                    let bytes = [UInt8](lineData)
-                    bytes.withUnsafeBufferPointer { buffer in
-                        if let baseAddress = buffer.baseAddress {
-                            _ = outputStream.write(baseAddress, maxLength: bytes.count)
-                        }
+        for p in points {
+            // Using a default up normal for now, but 2DGS will optimize it
+            let line = "\(p.pos.x) \(p.pos.y) \(p.pos.z) 0.0 1.0 0.0 \(Int(p.color.x)) \(Int(p.color.y)) \(Int(p.color.z))\n"
+            if let lineData = line.data(using: .utf8) {
+                let bytes = [UInt8](lineData)
+                bytes.withUnsafeBufferPointer { buffer in
+                    if let baseAddress = buffer.baseAddress {
+                        _ = outputStream.write(baseAddress, maxLength: bytes.count)
                     }
                 }
             }
@@ -547,33 +429,134 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
                 }
             }
         }
+        
+        // Extract dense point cloud for Live Preview!
+        extractPointCloud(from: frame)
+    }
+    
+    private func extractPointCloud(from frame: ARFrame) {
+        guard let sceneDepth = frame.sceneDepth, let confMap = sceneDepth.confidenceMap else { return }
+        let depthMap = sceneDepth.depthMap
+        
+        let depthW = CVPixelBufferGetWidth(depthMap)
+        let depthH = CVPixelBufferGetHeight(depthMap)
+        
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        CVPixelBufferLockBaseAddress(confMap, .readOnly)
+        defer {
+            CVPixelBufferUnlockBaseAddress(depthMap, .readOnly)
+            CVPixelBufferUnlockBaseAddress(confMap, .readOnly)
+        }
+        
+        guard let depthPtr = CVPixelBufferGetBaseAddress(depthMap)?.assumingMemoryBound(to: Float32.self),
+              let confPtr = CVPixelBufferGetBaseAddress(confMap)?.assumingMemoryBound(to: UInt8.self) else { return }
+        
+        let intrinsics = frame.camera.intrinsics
+        let transform = frame.camera.transform
+        let imageResolution = frame.camera.imageResolution
+        
+        let scaleX = Float(imageResolution.width) / Float(depthW)
+        let scaleY = Float(imageResolution.height) / Float(depthH)
+        
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]
+        let cy = intrinsics[2][1]
+        
+        guard let rgbData = latestRGBData, latestRGBWidth > 0, latestRGBHeight > 0 else { return }
+        let rgbBytes = [UInt8](rgbData)
+        
+        var newPoints = false
+        
+        // Sample every 4th pixel (~3000 points per frame)
+        for y in stride(from: 0, to: depthH, by: 4) {
+            for x in stride(from: 0, to: depthW, by: 4) {
+                let index = y * depthW + x
+                let conf = confPtr[index]
+                if conf < 2 { continue } // Only high confidence
+                
+                let z = depthPtr[index]
+                if z < 0.1 || z > 5.0 { continue }
+                
+                let rgbX = Float(x) * scaleX
+                let rgbY = Float(y) * scaleY
+                
+                // Unproject to camera space
+                let x_c = (rgbX - cx) * z / fx
+                let y_c = (rgbY - cy) * z / fy
+                
+                let pointCamera = SIMD4<Float>(x_c, y_c, -z, 1.0)
+                let pointWorld = transform * pointCamera
+                let pos = SIMD3<Float>(pointWorld.x, pointWorld.y, pointWorld.z)
+                
+                let u = rgbX / Float(imageResolution.width)
+                let v = rgbY / Float(imageResolution.height)
+                let px = Int(u * Float(latestRGBWidth))
+                let py = Int(v * Float(latestRGBHeight))
+                
+                if px >= 0 && px < latestRGBWidth && py >= 0 && py < latestRGBHeight {
+                    let offset = (py * latestRGBWidth + px) * 4
+                    if offset + 2 < rgbBytes.count {
+                        if colorGrid.addPoint(pos: pos, r: rgbBytes[offset], g: rgbBytes[offset + 1], b: rgbBytes[offset + 2]) {
+                            newPoints = true
+                        }
+                    }
+                }
+            }
+        }
+        
+        if newPoints {
+            // Update node occasionally so it doesn't freeze the UI on every frame
+            DispatchQueue.main.async {
+                self.rebuildPointCloudNode()
+            }
+        }
+    }
+    
+    private func rebuildPointCloudNode() {
+        let points = Array(colorGrid.grid.values)
+        guard !points.isEmpty else { return }
+        
+        var vertices = [SCNVector3]()
+        var colors = [SIMD4<Float>]()
+        var indices = [Int32]()
+        
+        vertices.reserveCapacity(points.count)
+        colors.reserveCapacity(points.count)
+        indices.reserveCapacity(points.count)
+        
+        for (i, p) in points.enumerated() {
+            vertices.append(SCNVector3(p.pos.x, p.pos.y, p.pos.z))
+            colors.append(SIMD4<Float>(p.color.x / 255.0, p.color.y / 255.0, p.color.z / 255.0, 1.0))
+            indices.append(Int32(i))
+        }
+        
+        let vertexSource = SCNGeometrySource(vertices: vertices)
+        let colorData = Data(bytes: colors, count: colors.count * MemoryLayout<SIMD4<Float>>.stride)
+        let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: colors.count, usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride)
+        
+        let indexData = Data(bytes: indices, count: indices.count * MemoryLayout<Int32>.stride)
+        let element = SCNGeometryElement(data: indexData, primitiveType: .point, primitiveCount: indices.count, bytesPerIndex: MemoryLayout<Int32>.size)
+        element.pointSize = 10.0
+        element.minimumPointScreenSpaceRadius = 2.0
+        element.maximumPointScreenSpaceRadius = 15.0
+        
+        let geometry = SCNGeometry(sources: [vertexSource, colorSource], elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        geometry.firstMaterial = material
+        
+        if pointCloudNode == nil {
+            pointCloudNode = SCNNode()
+            arView.scene.rootNode.addChildNode(pointCloudNode!)
+        }
+        pointCloudNode?.geometry = geometry
     }
     
     // MARK: - ARSCNViewDelegate
     
+    // We no longer render the blocky ARMeshAnchor! We use our dense pointCloudNode instead.
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
-        guard let meshAnchor = anchor as? ARMeshAnchor else { return nil }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return nil }
-        
-        let material = SCNMaterial()
-        material.isDoubleSided = true
-        material.lightingModel = .constant // No shading, pure color like 3DGS!
-        material.transparencyMode = .dualLayer
-        
-        geometry.firstMaterial = material
-        return SCNNode(geometry: geometry)
-    }
-    
-    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
-        guard let geometry = SCNGeometry(from: meshAnchor.geometry, nodeTransform: meshAnchor.transform, camera: latestCamera, rgbData: latestRGBData, rgbWidth: latestRGBWidth, rgbHeight: latestRGBHeight, colorGrid: colorGrid) else { return }
-        
-        let material = SCNMaterial()
-        material.isDoubleSided = true
-        material.lightingModel = .constant // No shading, pure color like 3DGS!
-        material.transparencyMode = .dualLayer
-        
-        geometry.firstMaterial = material
-        node.geometry = geometry
+        return nil
     }
 }
