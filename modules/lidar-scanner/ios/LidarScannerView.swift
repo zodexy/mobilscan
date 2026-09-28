@@ -8,7 +8,7 @@ import CoreImage
 import UIKit
 import Metal
 import ImageIO
-import UniformTypeIdentifiers
+import MobileCoreServices
 
 struct VoxelKey: Hashable {
     let x: Int
@@ -65,8 +65,11 @@ extension SCNGeometry {
         let vertexSource = SCNGeometrySource(buffer: vertices.buffer, vertexFormat: vertices.format, semantic: .vertex, vertexCount: vertices.count, dataOffset: vertices.offset, dataStride: vertices.stride)
         let normalSource = SCNGeometrySource(buffer: normals.buffer, vertexFormat: normals.format, semantic: .normal, vertexCount: normals.count, dataOffset: normals.offset, dataStride: normals.stride)
         
-        let indices = [Int32](0..<Int32(vertices.count))
-        let geometryElement = SCNGeometryElement(indices: indices, primitiveType: .point)
+        let facesData = Data(bytes: faces.buffer.contents(), count: faces.buffer.length)
+        let geometryElement = SCNGeometryElement(data: facesData,
+                                                 primitiveType: .triangles,
+                                                 primitiveCount: faces.count,
+                                                 bytesPerIndex: faces.bytesPerIndex)
         
         var sources = [vertexSource, normalSource]
         
@@ -542,18 +545,21 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             
             // Save depth PNG
             if let mmData = depthDataArray {
-                if let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),
-                   let context = CGContext(data: UnsafeMutableRawPointer(mutating: mmData), width: depthW, height: depthH, bitsPerComponent: 16, bytesPerRow: depthW * 2, space: colorSpace, bitmapInfo: CGImageAlphaInfo.none.rawValue),
-                   let dCgImg = context.makeImage(),
-                   let destination = CGImageDestinationCreateWithURL(depthUrl as CFURL, UTType.png.identifier as CFString, 1, nil) {
-                    CGImageDestinationAddImage(destination, dCgImg, nil)
-                    CGImageDestinationFinalize(destination)
+                let data = Data(bytes: mmData, count: mmData.count * 2)
+                if let provider = CGDataProvider(data: data as CFData),
+                   let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),
+                   let dCgImg = CGImage(width: depthW, height: depthH, bitsPerComponent: 16, bitsPerPixel: 16, bytesPerRow: depthW * 2, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
+                    
+                    if let destination = CGImageDestinationCreateWithURL(depthUrl as CFURL, kUTTypePNG, 1, nil) {
+                        CGImageDestinationAddImage(destination, dCgImg, nil)
+                        CGImageDestinationFinalize(destination)
+                    }
                 }
             }
             
             // Save confidence PNG
             if let cCgImg = confCgImage {
-                if let destination = CGImageDestinationCreateWithURL(confUrl as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                if let destination = CGImageDestinationCreateWithURL(confUrl as CFURL, kUTTypePNG, 1, nil) {
                     CGImageDestinationAddImage(destination, cCgImg, nil)
                     CGImageDestinationFinalize(destination)
                 }
@@ -571,9 +577,6 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         material.isDoubleSided = true
         material.lightingModel = .constant // No shading, pure color like 3DGS!
         material.transparencyMode = .dualLayer
-        material.shaderModifiers = [
-            .geometry: "_geometry.pointSize = 10.0;" // 10 pixel splats! Matches 3DGS style.
-        ]
         
         geometry.firstMaterial = material
         return SCNNode(geometry: geometry)
@@ -587,9 +590,6 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         material.isDoubleSided = true
         material.lightingModel = .constant // No shading, pure color like 3DGS!
         material.transparencyMode = .dualLayer
-        material.shaderModifiers = [
-            .geometry: "_geometry.pointSize = 10.0;" // 10 pixel splats! Matches 3DGS style.
-        ]
         
         geometry.firstMaterial = material
         node.geometry = geometry
