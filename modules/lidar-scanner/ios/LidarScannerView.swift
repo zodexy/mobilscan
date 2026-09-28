@@ -431,9 +431,12 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         }
         
         // Extract dense point cloud for Live Preview!
-        extractPointCloud(from: frame)
+        if #available(iOS 14.0, *) {
+            extractPointCloud(from: frame)
+        }
     }
     
+    @available(iOS 14.0, *)
     private func extractPointCloud(from frame: ARFrame) {
         guard let sceneDepth = frame.sceneDepth, let confMap = sceneDepth.confidenceMap else { return }
         let depthMap = sceneDepth.depthMap
