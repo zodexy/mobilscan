@@ -504,7 +504,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
             let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
             let viewProj = projMatrix * viewMatrix
             
-            for i in 0..<featurePoints.points.count {
+            for i in 0..<featurePoints.count {
                 let point = featurePoints.points[i]
                 let pos = SIMD3<Float>(point.x, point.y, point.z)
                 
@@ -549,7 +549,7 @@ class LidarScannerView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
         let projMatrix = frame.camera.projectionMatrix(for: .landscapeRight, viewportSize: CGSize(width: latestRGBWidth, height: latestRGBHeight), zNear: 0.001, zFar: 1000)
         let viewProj = projMatrix * viewMatrix
         
-        for i in 0..<featurePoints.points.count {
+        for i in 0..<featurePoints.count {
             let point = featurePoints.points[i]
             let pos = SIMD3<Float>(point.x, point.y, point.z)
             
